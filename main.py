@@ -31,6 +31,17 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def get_season_name(month):
+    if month in ["January", "February", "December"]:
+        return "Winter"
+    elif month in ["March", "April", "May"]:
+        return "Spring"
+    elif month in ["June", "July", "August"]:
+        return "Summer"
+    else:
+        return "Autumn"
+
+
 # Initialize SQLite database
 def init_db():
     conn = sqlite3.connect("peak_flow.db")
@@ -164,7 +175,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Пожалуйста, загрузите файл с данными (CSV или Excel).")
 
     elif context.user_data.get("awaiting_log"):
-        try:
+        try:  # Add more data and a model to parse data
             args = update.message.text.split()
             peak_flow_metry = [int(args[0]), int(args[1]), int(args[2])]
             treatment = args[3] if len(args) > 3 else None
@@ -263,7 +274,7 @@ async def handle_analysis(query, context: ContextTypes.DEFAULT_TYPE, period: str
     conn = sqlite3.connect("peak_flow.db")
     df = pd.read_sql(
         f"""
-        SELECT maximum, "symbicort turbuhaler", salbutamol, "relvar ellipta", "extra info", pulmicort
+        SELECT maximum, "symbicort turbuhaler", salbutamol, "relvar ellipta", "extra info", pulmicort, date
         FROM readings
         WHERE user_id=? AND date >= datetime('now', '-{period_map[period]}') AND  maximum <> 0 and maximum is not null
         ORDER BY date
@@ -277,21 +288,24 @@ async def handle_analysis(query, context: ContextTypes.DEFAULT_TYPE, period: str
         await query.edit_message_text(f"Нет данных за последние {period_map[period]}.")
         return
 
+    df['Date'] = pd.to_datetime(df['Date'])
     df["Extra info"] = df["Extra info"].str.lower()
-
-    df_encoded = pd.get_dummies(df, columns=["Extra info"])
-
-    final_df = pd.concat([df, df_encoded], ignore_index=False)
-
-    final_df = final_df.drop(columns=["Extra info"])
+    df['day_name'] = df['Date'].dt.day_name()
+    df["Month"] = df["Date"].dt.month_name()
+    df["Season"] = df["Month"].apply(get_season_name)
 
     avg = df["Maximum"].mean()
     min_val = df["Maximum"].min()
     max_val = df["Maximum"].max()
 
-    sns.heatmap(final_df.corr(), annot=True, cmap='coolwarm', fmt=".2f")
+    df_encoded = pd.get_dummies(df, columns=["Extra info", "day_name", "Month", "Season"])
+
+    final_df = pd.concat([df, df_encoded], ignore_index=False)
+    final_df = final_df.drop(columns=["Extra info", "day_name", "Month", "Season", "Date"])
+    corr_matrix = final_df.corr()["Maximum"].to_frame()
+    plt.figure(figsize=(6, 10))  # Fix size
+    sns.heatmap(corr_matrix, annot=True, cmap='coolwarm', fmt=".2f")
     plt.title("Correlation matrix")
-    plt.grid()
     plot_path = "correlation_plot.png"
     plt.savefig(plot_path)
     plt.close()
@@ -351,11 +365,11 @@ async def handle_predict(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = sqlite3.connect("peak_flow.db")
     df = pd.read_sql(
         """
-        SELECT maximum, date
+        SELECT Maximum, date
         FROM readings
-        WHERE user_id=?
-        ORDER BY maximum DESC
-        LIMIT 7
+        WHERE user_id=? AND Maximum <> 0 AND Maximum is not null
+        ORDER BY date DESC
+        LIMIT 31
     """,
         conn,
         params=(user_id,),
@@ -366,7 +380,7 @@ async def handle_predict(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Недостаточно данных для прогноза.")
         return
 
-    prediction = df["maximum"].mean()
+    prediction = df["Maximum"].mean() # Fix for a better prediction
     await update.message.reply_text(f"Прогноз пикфлоу на сегодня: {prediction:.1f}", reply_markup=main_reply_keyboard())
 
 
