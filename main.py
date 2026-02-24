@@ -239,9 +239,9 @@ async def handle_log_reading(update: Update, context: ContextTypes.DEFAULT_TYPE,
     c = conn.cursor()
     c.execute('''
         INSERT INTO readings (
-            user_id, first_try, second_try, third_try, maximum, date,
-            'symbicort turbuhaler', salbutamol, 'relvar ellipta', pulmicort, green_zone,
-            yellow_zone, red_zone, 'extra info'
+            user_id, 'First try', 'Second try', 'Third try', Maximum, Date,
+            'Symbicort turbuhaler', Salbutamol, 'Relvar ellipta', Pulmicort, 'Green zone',
+            'Yellow zone', 'Red zone', 'Extra info'
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (
         user_id, peak_flow[0], peak_flow[1], peak_flow[2], maximum, date,
