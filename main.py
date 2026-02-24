@@ -1,7 +1,7 @@
 import sqlite3
 import pandas as pd
 import matplotlib.pyplot as plt
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 from telegram import (
     Update,
     InlineKeyboardButton,
@@ -450,6 +450,56 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     os.remove(file_path)
 
 
+# Function to send daily notifications
+async def daily_notification(context: ContextTypes.DEFAULT_TYPE):
+    job = context.job
+    user_id = job.chat_id
+
+    # Fetch user's peak flow data from the database
+    conn = sqlite3.connect('peak_flow.db')
+    df = pd.read_sql(f'''
+        SELECT Maximum, date
+        FROM readings
+        WHERE user_id=? AND Maximum <> 0 AND Maximum is not Null
+        ORDER BY date DESC
+        LIMIT 30
+    ''', conn, params=(user_id,))
+    conn.close()
+
+    if df.empty:
+        await context.bot.send_message(chat_id=user_id, text="Нет достаточных данных для анализа.")
+        return
+
+    # Calculate statistics
+    avg_peak_flow = df['Maximum'].mean()
+    yesterday_peak_flow = df.iloc[0]['Maximum'] if len(df) > 0 else avg_peak_flow
+    trend = "лучше" if df['Maximum'].iloc[0] > df['Maximum'].iloc[-1] else "хуже" if len(df) > 1 else "стабильно"
+
+    # Send the notification
+    message = (
+        f"📊 Ежедневный отчет:\n"
+        f"Ожидаемое значение пикфлоу сегодня: {avg_peak_flow:.1f}\n"
+        f"Вчерашнее значение: {yesterday_peak_flow:.1f}\n"
+        f"Тренд: Сегодня ожидается {trend}, чем вчера."
+    )
+    await context.bot.send_message(chat_id=user_id, text=message)
+
+
+# Command to set up daily notifications
+async def set_daily_notification(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.message.chat_id
+    context.job_queue.run_daily(
+        daily_notification,
+        time=time(hour=int(os.environ["NOTIFICATION_CRON_HOUR"]), minute=0),
+        chat_id=chat_id,
+        name=str(chat_id)
+    )
+    jobs = context.job_queue.jobs()
+    for job in jobs:
+        print(job.next_run_time)
+    await update.message.reply_text(f"Ежедневные уведомления настроены на {os.environ['NOTIFICATION_CRON_HOUR']}:00.")
+
+
 # Main function
 def main():
     init_db()
@@ -457,6 +507,7 @@ def main():
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(button))
+    application.add_handler(CommandHandler("setnotification", set_daily_notification))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
 
