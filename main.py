@@ -332,7 +332,7 @@ async def handle_log_reading(
 # Get analysis for a period
 async def handle_analysis(query, context: ContextTypes.DEFAULT_TYPE, period: str):
     user_id = query.from_user.id
-    period_map = {"week": "1 week", "month": "1 month", "3months": "3 months"}
+    period_map = {"week": "7 days", "month": "1 month", "3months": "3 months"}
 
     conn = sqlite3.connect("peak_flow.db")
     df = pd.read_sql(
@@ -393,7 +393,7 @@ async def handle_analysis(query, context: ContextTypes.DEFAULT_TYPE, period: str
 # Generate and send a plot
 async def handle_plot(query, context: ContextTypes.DEFAULT_TYPE, period: str):
     user_id = query.from_user.id
-    period_map = {"week": "1 week", "month": "1 month", "3months": "3 months"}
+    period_map = {"week": "7 days", "month": "1 month", "3months": "3 months"}
 
     conn = sqlite3.connect("peak_flow.db")
     df = pd.read_sql(
