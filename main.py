@@ -50,8 +50,7 @@ def init_db():
         """
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
-            username TEXT,
-            threshold REAL DEFAULT 300
+            username TEXT
         )
     """
     )
