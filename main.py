@@ -59,11 +59,11 @@ def init_db():
     """
     )
 
+    # Medicine Table
     c.execute(
         """
         CREATE TABLE IF NOT EXISTS medicine (
             medicine_id INTEGER PRIMARY KEY,
-            user_id INTEGER NOT NULL,
             medicine_name TEXT,
             dose TEXT,
             dose_number INTEGER,
@@ -71,6 +71,38 @@ def init_db():
         )
     """
     )
+
+    # Taken Medicine table
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS taken_medicine (
+            id INTEGER PRIMARY KEY,
+            medicine_id INTEGER,
+            user_id INTEGER,
+            doses INTEGER,
+            date DATE,
+            FOREIGN KEY(user_id) REFERENCES users(user_id),
+            FOREIGN KEY(medicine_id) REFERENCES medicine(medicine_id)
+        )
+    """
+    )
+
+    # Extra Info Table
+    c.execute(
+        """
+            CREATE TABLE IF NOT EXISTS extra_info (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                Date timestamp,
+                Sport BOOLEAN,
+                Sickness BOOLEAN,
+                Stress BOOLEAN,
+                Allergy BOOLEAN,
+                FOREIGN KEY(user_id) REFERENCES users(user_id)
+            )
+        """
+    )
+
     # Readings Table
     c.execute(
         """
@@ -85,7 +117,6 @@ def init_db():
                 "Green zone" REAL,
                 "Yellow zone" REAL,
                 "Red zone" REAL,
-                "Extra info" TEXT,
                 FOREIGN KEY(user_id) REFERENCES users(user_id)
             )
         """
