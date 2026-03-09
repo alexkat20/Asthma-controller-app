@@ -1,7 +1,7 @@
 import sqlite3
 import pandas as pd
 import matplotlib.pyplot as plt
-from datetime import datetime, timedelta, time
+from datetime import datetime, time
 from telegram import (
     Update,
     InlineKeyboardButton,
@@ -46,29 +46,42 @@ def get_season_name(month):
 def init_db():
     conn = sqlite3.connect("peak_flow.db")
     c = conn.cursor()
+    #  User Table
     c.execute(
         """
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
-            username TEXT
+            username TEXT,
+            name TEXT,
+            surname TEXT,
+            birth_date date
         )
     """
     )
-    # Create the new readings table with updated schema
+
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS medicine (
+            medicine_id INTEGER PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            medicine_name TEXT,
+            dose TEXT,
+            dose_number INTEGER,
+            FOREIGN KEY(user_id) REFERENCES users(user_id)
+        )
+    """
+    )
+    # Readings Table
     c.execute(
         """
             CREATE TABLE IF NOT EXISTS readings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER,
+                Date timestamp,
                 "First try" REAL,
                 "Second try" REAL,
                 "Third try" REAL,
                 Maximum REAL,
-                Date timestamp,
-                "Symbicort turbuhaler" INTEGER,
-                salbutamol INTEGER,
-                "Relvar ellipta" INTEGER,
-                pulmicort INTEGER,
                 "Green zone" REAL,
                 "Yellow zone" REAL,
                 "Red zone" REAL,
@@ -175,6 +188,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_reply_keyboard(),
     )
 
+    await set_daily_notification(update, context)
+
 
 # Handle text messages
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -259,7 +274,7 @@ async def handle_log_reading(
     symbicort = salbutamol = relvar = pulmicort = 0
     extra_info = notes
 
-    # Example parsing logic (customize as needed)
+    # Example parsing logic
     if treatment:
         if "symbicort" in treatment.lower():
             symbicort = 1
@@ -464,8 +479,7 @@ async def handle_predict(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_set_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.job_queue.run_daily(
         send_reminder,
-        time=datetime.now().replace(hour=9, minute=0, second=0, microsecond=0)
-        + timedelta(days=1),
+        time=time(hour=int(os.environ["NOTIFICATION_CRON_HOUR"]), minute=0),
         chat_id=update.message.chat_id,
     )
     await update.message.reply_text(
@@ -509,7 +523,14 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Insert data into the database
         conn = sqlite3.connect("peak_flow.db")
 
+        #  readings_cols = ["user_id", "Date", "First try", "Second try", "Third try", "Maximum", "Green zone",
+        #                   "Yellow zone", "Red zone", "Extra info",]
+        #  user_cols = ["user_id"]
+        #  medicines_cols = []
+
         data.to_sql("readings", conn, if_exists="append", index_label="id")
+        #  data.to_sql("user", conn, if_exists="append", index_label="id")
+        #  data.to_sql("medicine", conn, if_exists="append", index_label="id")
 
         conn.commit()
         conn.close()
@@ -578,9 +599,6 @@ async def set_daily_notification(update: Update, context: ContextTypes.DEFAULT_T
         chat_id=chat_id,
         name=str(chat_id),
     )
-    jobs = context.job_queue.jobs()
-    for job in jobs:
-        print(job.next_run_time)
     await update.message.reply_text(
         f"Ежедневные уведомления настроены на {os.environ['NOTIFICATION_CRON_HOUR']}:00."
     )
