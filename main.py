@@ -271,7 +271,7 @@ async def handle_log_reading(
             pulmicort = 1
 
     # Get current date
-    date = datetime.now()
+    date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     conn = sqlite3.connect("peak_flow.db")
     c = conn.cursor()
