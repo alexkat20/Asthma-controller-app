@@ -16,6 +16,7 @@ from telegram.ext import (
     ContextTypes,
     MessageHandler,
     filters,
+    ConversationHandler,
 )
 import os
 import logging
@@ -29,6 +30,9 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+
+PEAK_FLOW, MEDICINE, EXTRA_INFO = range(3)
 
 
 def get_season_name(month):
@@ -63,11 +67,10 @@ def init_db():
     c.execute(
         """
         CREATE TABLE IF NOT EXISTS medicine (
-            medicine_id INTEGER PRIMARY KEY,
+            medicine_id INTEGER PRIMARY KEY AUTOINCREMENT,
             medicine_name TEXT,
             dose TEXT,
-            dose_number INTEGER,
-            FOREIGN KEY(user_id) REFERENCES users(user_id)
+            dose_number INTEGER
         )
     """
     )
@@ -76,7 +79,7 @@ def init_db():
     c.execute(
         """
         CREATE TABLE IF NOT EXISTS taken_medicine (
-            id INTEGER PRIMARY KEY,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
             medicine_id INTEGER,
             user_id INTEGER,
             doses INTEGER,
@@ -257,19 +260,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "Пожалуйста, загрузите файл с данными (CSV или Excel)."
         )
-
-    elif context.user_data.get("awaiting_log"):
-        try:  # Add more data and a model to parse data
-            args = update.message.text.split()
-            peak_flow_metry = [int(args[0]), int(args[1]), int(args[2])]
-            treatment = args[3] if len(args) > 3 else None
-            notes = " ".join(args[4:]) if len(args) > 4 else None
-            await handle_log_reading(update, context, peak_flow_metry, treatment, notes)
-        except (ValueError, IndexError):
-            await update.message.reply_text(
-                "Некорректный ввод. Пример: `450 сальбутамол занимался спортом`"
-            )
-        context.user_data["awaiting_log"] = False
+    elif text == "📝 Log Reading":
+        return await start_entry(update, context)
 
 
 # Handle button presses
@@ -290,6 +282,187 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+# Start the conversation
+async def start_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "Please enter your 3 peak flow measurements separated by spaces (e.g., 450 460 470):"
+    )
+    return PEAK_FLOW
+
+
+# Handle peak flow input
+async def handle_peak_flow(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_input = update.message.text.split()
+    if len(user_input) != 3:
+        await update.message.reply_text(
+            "Invalid input. Please enter 3 peak flow measurements and the date (e.g., 450 460 470):"
+        )
+        return PEAK_FLOW
+
+    try:
+        user_id = update.message.from_user.id
+        date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        peak_flow_1, peak_flow_2, peak_flow_3 = user_input
+        maximum = max(float(peak_flow_1), float(peak_flow_2), float(peak_flow_3))
+        context.user_data["peak_flow"] = {
+            "first_try": float(peak_flow_1),
+            "second_try": float(peak_flow_2),
+            "third_try": float(peak_flow_3),
+            "maximum": maximum,
+            "date": date,
+        }
+
+        conn = sqlite3.connect("peak_flow.db")
+        c = conn.cursor()
+        c.execute(
+            """
+            INSERT INTO readings (
+                user_id, "First try", "Second try", "Third try", Maximum, Date
+            ) VALUES (?, ?, ?, ?, ?, ?)
+        """,
+            (
+                user_id,
+                peak_flow_1,
+                peak_flow_2,
+                peak_flow_3,
+                maximum,
+                date,
+            ),
+        )
+        conn.commit()
+
+        # Check for low reading
+        c.execute(
+            """SELECT
+                           "Green zone", "Yellow Zone"
+                           FROM readings
+                           WHERE user_id=?
+                           ORDER BY Date desc""",
+            (user_id,),
+        )
+        threshold = c.fetchone()
+
+        if threshold and threshold[1] < maximum <= threshold[0]:
+            await update.message.reply_text(
+                f"⚠️ Внимание: Ваш пикфлоу ({maximum}) в жёлтой зоне (<{threshold[0]}). Необходимо наблюдение"
+            )
+        elif threshold and maximum <= threshold[1]:
+            await update.message.reply_text(
+                f"⚠️ Внимание: Ваш пикфлоу ({maximum}) в красной зоне (<{threshold[1]}). Необходимо консультация врача"
+            )
+        else:
+            await update.message.reply_text(
+                f"Ваш пикфлоу ({maximum}) в зелёной зоне (>{threshold[0]}). Состояние стабильно"
+            )
+        await update.message.reply_text(f"Сохранено: Максимальный пикфлоу={maximum}")
+
+        c.execute(
+            """SELECT medicine_name
+                     FROM medicine
+                 """,
+        )
+        medicines = [medicine[0] for medicine in c.fetchall()]
+
+        conn.close()
+
+    except ValueError:
+        await update.message.reply_text(
+            "Invalid input. Please enter 3 peak flow measurements(e.g., 450 460 470):"
+        )
+        return PEAK_FLOW
+
+    await update.message.reply_text(
+        f"Which medicine of the following: {', '.join(medicines)}, did you take today?"
+    )
+    return MEDICINE
+
+
+# Handle medicine input
+async def handle_medicine(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    medicine = update.message.text.lower()
+    user_id = update.message.from_user.id
+    context.user_data["medicine"] = medicine
+
+    conn = sqlite3.connect("peak_flow.db")
+    c = conn.cursor()
+
+    c.execute(
+        """SELECT medicine_id
+                 FROM medicine
+                 WHERE medicine_name=?
+             """,
+        (medicine,),
+    )
+
+    medicine_id = c.fetchone()[0]
+
+    c.execute(
+        """
+        INSERT INTO taken_medicine (
+            medicine_id, user_id, doses, Date
+        ) VALUES (?, ?, ?, ?)
+    """,
+        (
+            medicine_id,
+            user_id,
+            "1",
+            context.user_data["peak_flow"]["date"],
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    await update.message.reply_text(
+        "Please enter any extra info (e.g., sport, stress, sickness, allergy, none):"
+    )
+    return EXTRA_INFO
+
+
+# Handle extra info input
+async def handle_extra_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    extra_info = update.message.text
+    context.user_data["extra_info"] = extra_info
+
+    # Save data to database
+    user_id = update.message.from_user.id
+    peak_flow_data = context.user_data["peak_flow"]
+    medicine = context.user_data["medicine"]
+
+    conn = sqlite3.connect("peak_flow.db")
+    c = conn.cursor()
+
+    c.execute(
+        f"""
+        INSERT INTO extra_info (
+            user_id, Date, {extra_info.capitalize()}
+        ) VALUES (?, ?, ?)
+    """,
+        (user_id, peak_flow_data["date"], True),
+    )
+    conn.commit()
+    conn.close()
+
+    await update.message.reply_text(
+        f"Data saved successfully!\n"
+        f"Peak Flow: {peak_flow_data['first_try']}, {peak_flow_data['second_try']}, {peak_flow_data['third_try']}\n"
+        f"Date: {peak_flow_data['date']}\n"
+        f"Medicine: {medicine}\n"
+        f"Extra Info: {extra_info}"
+    )
+
+    # Clear user data
+    context.user_data.clear()
+
+    return ConversationHandler.END
+
+
+# Cancel and end conversation
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Operation cancelled.")
+    context.user_data.clear()
+    return ConversationHandler.END
+
+
 # Log a peak flow reading
 async def handle_log_reading(
     update: Update,
@@ -301,21 +474,6 @@ async def handle_log_reading(
     user_id = update.message.from_user.id
     maximum = max(peak_flow)
 
-    # Parse treatment and notes to extract medication and zone info
-    symbicort = salbutamol = relvar = pulmicort = 0
-    extra_info = notes
-
-    # Example parsing logic
-    if treatment:
-        if "symbicort" in treatment.lower():
-            symbicort = 1
-        if "salbutamol" in treatment.lower():
-            salbutamol = 1
-        if "relvar" in treatment.lower():
-            relvar = 1
-        if "pulmicort" in treatment.lower():
-            pulmicort = 1
-
     # Get current date
     date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -325,8 +483,7 @@ async def handle_log_reading(
         """
         INSERT INTO readings (
             user_id, "First try", "Second try", "Third try", Maximum, Date,
-            "Symbicort turbuhaler", Salbutamol, "Relvar ellipta", Pulmicort, "Extra info"
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?)
     """,
         (
             user_id,
@@ -335,11 +492,6 @@ async def handle_log_reading(
             peak_flow[2],
             maximum,
             date,
-            symbicort,
-            salbutamol,
-            relvar,
-            pulmicort,
-            extra_info,
         ),
     )
     conn.commit()
@@ -368,7 +520,7 @@ async def handle_log_reading(
             f"Ваш пикфлоу ({maximum}) в зелёной зоне (>{threshold[0]}). Состояние стабильно"
         )
     await update.message.reply_text(
-        f"Сохранено: Максимальный пикфлоу={maximum}, Лечение={treatment}, Заметки={extra_info}"
+        f"Сохранено: Максимальный пикфлоу={maximum}, Лечение={treatment}"
     )
     conn.close()
     await update.message.reply_text("Главное меню:", reply_markup=main_reply_keyboard())
@@ -639,6 +791,27 @@ async def set_daily_notification(update: Update, context: ContextTypes.DEFAULT_T
 def main():
     init_db()
     application = Application.builder().token(os.environ["TOKEN"]).build()
+
+    conv_handler = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex(r"^📝 Log Reading$"), start_entry)],
+        states={
+            PEAK_FLOW: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_peak_flow)
+            ],
+            MEDICINE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_medicine)
+            ],
+            EXTRA_INFO: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_extra_info)
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+
+    application.add_handler(conv_handler)
+    application.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
+    )
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(button))
