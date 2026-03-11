@@ -33,6 +33,7 @@ logger = logging.getLogger(__name__)
 
 
 PEAK_FLOW, MEDICINE, EXTRA_INFO = range(3)
+ADD_MEDICINE_NAME, ADD_MEDICINE_DOSE = range(3, 5)
 
 
 def get_season_name(month):
@@ -69,8 +70,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS medicine (
             medicine_id INTEGER PRIMARY KEY AUTOINCREMENT,
             medicine_name TEXT,
-            dose TEXT,
-            dose_number INTEGER
+            dose TEXT
         )
     """
     )
@@ -169,6 +169,7 @@ def main_reply_keyboard():
         [KeyboardButton("📝 Log Reading"), KeyboardButton("📊 Analysis")],
         [KeyboardButton("📈 Plot"), KeyboardButton("🔮 Predict")],
         [KeyboardButton("⏰ Set Reminder"), KeyboardButton("📤 Upload Data")],
+        [KeyboardButton("💊 Add Medicine")],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -185,6 +186,7 @@ def main_inline_keyboard():
         ],
         [InlineKeyboardButton("⏰ Set Reminder", callback_data="⏰ Set Reminder")],
         [InlineKeyboardButton("📤 Upload Data", callback_data="📤 Upload Data")],
+        [InlineKeyboardButton("💊 Add Medicine", callback_data="💊 Add Medicine")],
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -206,12 +208,14 @@ def period_inline_keyboard():
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     username = update.message.from_user.username
+    first_name = update.message.from_user.first_name
+    last_name = update.message.from_user.last_name
 
     conn = sqlite3.connect("peak_flow.db")
     c = conn.cursor()
     c.execute(
-        "INSERT OR IGNORE INTO users (user_id, username) VALUES (?, ?)",
-        (user_id, username),
+        "INSERT OR IGNORE INTO users (user_id, username, name, surname) VALUES (?, ?, ?, ?)",
+        (user_id, username, first_name, last_name),
     )
     conn.commit()
     conn.close()
@@ -262,6 +266,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     elif text == "📝 Log Reading":
         return await start_entry(update, context)
+    elif text == "💊 Add Medicine":
+        return await start_add_medicine(update, context)
 
 
 # Handle button presses
@@ -280,6 +286,51 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(
             "Главное меню:", reply_markup=main_inline_keyboard()
         )
+
+
+# Start the conversation for adding medicine
+async def start_add_medicine(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Please enter the name of the medicine:")
+    return ADD_MEDICINE_NAME
+
+
+# Handle medicine name input
+async def handle_medicine_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    medicine_name = update.message.text
+    context.user_data["medicine_name"] = medicine_name
+    await update.message.reply_text(
+        "Please enter the dose of the medicine (e.g., 100mg, 1 puff):"
+    )
+    return ADD_MEDICINE_DOSE
+
+
+# Handle medicine dose input
+async def handle_medicine_dose(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    dose = update.message.text
+
+    # Save medicine to database
+    medicine_name = context.user_data["medicine_name"]
+
+    conn = sqlite3.connect("peak_flow.db")
+    c = conn.cursor()
+    c.execute(
+        """
+        INSERT INTO medicine (medicine_name, dose)
+        VALUES (?, ?)
+    """,
+        (medicine_name, dose),
+    )
+    conn.commit()
+    conn.close()
+
+    await update.message.reply_text(
+        f"Medicine saved successfully!\n" f"Name: {medicine_name}\n" f"Dose: {dose}\n"
+    )
+
+    # Clear user data
+    context.user_data.clear()
+
+    return ConversationHandler.END
 
 
 # Start the conversation
@@ -463,69 +514,6 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
-# Log a peak flow reading
-async def handle_log_reading(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-    peak_flow: list[int],
-    treatment: str,
-    notes: str,
-):
-    user_id = update.message.from_user.id
-    maximum = max(peak_flow)
-
-    # Get current date
-    date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    conn = sqlite3.connect("peak_flow.db")
-    c = conn.cursor()
-    c.execute(
-        """
-        INSERT INTO readings (
-            user_id, "First try", "Second try", "Third try", Maximum, Date,
-        ) VALUES (?, ?, ?, ?, ?)
-    """,
-        (
-            user_id,
-            peak_flow[0],
-            peak_flow[1],
-            peak_flow[2],
-            maximum,
-            date,
-        ),
-    )
-    conn.commit()
-
-    # Check for low reading
-    c.execute(
-        """SELECT
-                       "Green zone", "Yellow Zone"
-                       FROM readings
-                       WHERE user_id=?
-                       ORDER BY Date desc""",
-        (user_id,),
-    )
-    threshold = c.fetchone()
-
-    if threshold and threshold[1] < maximum <= threshold[0]:
-        await update.message.reply_text(
-            f"⚠️ Внимание: Ваш пикфлоу ({maximum}) в жёлтой зоне (<{threshold[0]}). Необходимо наблюдение"
-        )
-    elif threshold and maximum <= threshold[1]:
-        await update.message.reply_text(
-            f"⚠️ Внимание: Ваш пикфлоу ({maximum}) в красной зоне (<{threshold[1]}). Необходимо консультация врача"
-        )
-    else:
-        await update.message.reply_text(
-            f"Ваш пикфлоу ({maximum}) в зелёной зоне (>{threshold[0]}). Состояние стабильно"
-        )
-    await update.message.reply_text(
-        f"Сохранено: Максимальный пикфлоу={maximum}, Лечение={treatment}"
-    )
-    conn.close()
-    await update.message.reply_text("Главное меню:", reply_markup=main_reply_keyboard())
-
-
 # Get analysis for a period
 async def handle_analysis(query, context: ContextTypes.DEFAULT_TYPE, period: str):
     user_id = query.from_user.id
@@ -706,14 +694,26 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Insert data into the database
         conn = sqlite3.connect("peak_flow.db")
 
-        #  readings_cols = ["user_id", "Date", "First try", "Second try", "Third try", "Maximum", "Green zone",
-        #                   "Yellow zone", "Red zone", "Extra info",]
-        #  user_cols = ["user_id"]
-        #  medicines_cols = []
+        readings_cols = [
+            "user_id",
+            "Date",
+            "First try",
+            "Second try",
+            "Third try",
+            "Maximum",
+            "Green zone",
+            "Yellow zone",
+            "Red zone",
+            "Extra info",
+        ]
+        #  medicines_cols = ["user_id", "Date", "Symbicort Turbuhaler", "Salbutamol", "Relvar Ellipta", "Pulmicort"]
+        #  extra_info_cols = ["user_id", "Date", "Extra info"]
 
-        data.to_sql("readings", conn, if_exists="append", index_label="id")
-        #  data.to_sql("user", conn, if_exists="append", index_label="id")
-        #  data.to_sql("medicine", conn, if_exists="append", index_label="id")
+        data[readings_cols].to_sql(
+            "readings", conn, if_exists="append", index_label="id"
+        )
+        #  data.to_sql("taken_medicine", conn, if_exists="append", index_label="id")
+        #  data.to_sql("extra_info", conn, if_exists="append", index_label="id")
 
         conn.commit()
         conn.close()
@@ -808,7 +808,23 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)],
     )
 
+    add_medicine_conv_handler = ConversationHandler(
+        entry_points=[
+            MessageHandler(filters.Regex(r"^💊 Add Medicine$"), start_add_medicine)
+        ],
+        states={
+            ADD_MEDICINE_NAME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_medicine_name)
+            ],
+            ADD_MEDICINE_DOSE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_medicine_dose)
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+
     application.add_handler(conv_handler)
+    application.add_handler(add_medicine_conv_handler)
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
     )
