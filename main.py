@@ -666,6 +666,87 @@ async def send_reminder(context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def save_taken_medicine_from_xlsx(df, user_id, conn):
+    c = conn.cursor()
+
+    c.execute(
+        "SELECT medicine_id, medicine_name FROM medicine",
+    )
+    medicines = {medicine[1]: medicine[0] for medicine in c.fetchall()}
+    medicines_cols = list(medicines.keys()) + ["Date"]
+
+    # Iterate over each row in the Excel file
+    for _, row in df[medicines_cols].iterrows():
+        # Get the date from the row
+        date = row["Date"].date()
+
+        # Iterate over each medicine column
+        for medicine_name, doses in row.items():
+            if medicine_name == "Date":
+                continue  # Skip the date column
+
+            if pd.isna(doses) or doses == 0:
+                continue  # Skip if no doses were taken
+
+            # Get the medicine_id from the medicine table
+            medicine_id = medicines[medicine_name]
+
+            if medicine_id is None:
+                continue
+
+            # Insert data into the taken_medicine table
+            c.execute(
+                """
+                INSERT INTO taken_medicine (medicine_id, user_id, doses, date)
+                VALUES (?, ?, ?, ?)
+            """,
+                (medicine_id, user_id, doses, date),
+            )
+            conn.commit()
+
+
+async def save_extra_info_from_file(df, user_id, conn):
+    extra_info_df = df[df["Extra info"].notna()][["Extra info", "Date"]]
+    extra_info_df["Extra info"] = extra_info_df["Extra info"].str.capitalize()
+    extra_info_df["Extra info"] = extra_info_df["Extra info"].str.replace(
+        "Sick", "Sickness"
+    )
+    extra_info_df["Extra info"] = extra_info_df["Extra info"].str.split(",")
+    c = conn.cursor()
+
+    extra_info_cols = ["Sport", "Sickness", "Stress", "Allergy"]
+
+    # Iterate over each row in the Excel file
+    for _, row in extra_info_df.iterrows():
+        # Get the date from the row
+        date = row["Date"].date()
+        extra_info = row["Extra info"]
+
+        for e_i in extra_info:
+            current_cols = {col: False for col in extra_info_cols}
+            if e_i in extra_info_cols:
+                current_cols[e_i] = True
+
+            sql_query = f"""
+                INSERT INTO extra_info (user_id, {", ".join(extra_info_cols)}, date)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """
+            # Insert data into the extra_info table
+            c.execute(
+                sql_query,
+                (
+                    user_id,
+                    current_cols["Sport"],
+                    current_cols["Sickness"],
+                    current_cols["Stress"],
+                    current_cols["Allergy"],
+                    date,
+                ),
+            )
+
+            conn.commit()
+
+
 # Handle document uploads
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
@@ -706,15 +787,12 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Red zone",
             "Extra info",
         ]
-        #  medicines_cols = ["user_id", "Date", "Symbicort Turbuhaler", "Salbutamol", "Relvar Ellipta", "Pulmicort"]
-        #  extra_info_cols = ["user_id", "Date", "Extra info"]
 
         data[readings_cols].to_sql(
             "readings", conn, if_exists="append", index_label="id"
         )
-        #  data.to_sql("taken_medicine", conn, if_exists="append", index_label="id")
-        #  data.to_sql("extra_info", conn, if_exists="append", index_label="id")
-
+        await save_taken_medicine_from_xlsx(data, user_id, conn)
+        await save_extra_info_from_file(data, user_id, conn)
         conn.commit()
         conn.close()
 
