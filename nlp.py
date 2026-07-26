@@ -1,0 +1,253 @@
+"""
+Лёгкий rule-based NLP для двух задач:
+
+1) detect_state(text) — определить состояние человека по свободному тексту
+   на русском (спорт/стресс/аллергия/болезнь/перелёт), с учётом отрицаний
+   ("спорта не было" не должно взводить флаг sport).
+
+2) parse_log_message(text, known_medicines) — разобрать одно сообщение вида
+   "450 сальбутамол занимался спортом" сразу на показания пикфлоу,
+   препараты+дозы и флаги состояния — под задачу №1 из ТЗ
+   ("записывать в формате одного сообщения").
+
+Это не полноценная ML-модель, а честный keyword/regex слой: для короткой,
+разговорной, часто однотипной статистики про самочувствие он даёт хорошее
+качество и, в отличие от внешнего LLM-вызова, работает без сети и без
+задержек. Позже это легко заменить или дополнить вызовом Claude API поверх
+этой же функции (см. комментарий в конце файла) для сложных формулировок,
+которые не ловятся словарём.
+"""
+
+import re
+
+STATE_KEYWORDS = {
+    "sport": [
+        "спорт",
+        "трениров",
+        "пробеж",
+        "бег",
+        "качалк",
+        "зал",
+        "плаван",
+        "футбол",
+        "баскетбол",
+        "велосипед",
+        "фитнес",
+        "нагрузк",
+        "sport",
+        "training",
+        "gym",
+        "workout",
+        "run",
+    ],
+    "sickness": [
+        "болел",
+        "простуд",
+        "температур",
+        "орви",
+        "просты",
+        "кашел",
+        "кашл",
+        "грипп",
+        "недомога",
+        "заболел",
+        "sick",
+        "sickness",
+        "ill",
+        "flu",
+        "cold",
+    ],
+    "stress": [
+        "стресс",
+        "нерв",
+        "переутомл",
+        "тревог",
+        "паник",
+        "экзамен",
+        "устал",
+        "перенапряж",
+        "stress",
+        "tired",
+        "anxiety",
+    ],
+    "allergy": [
+        "аллерг",
+        "пыльц",
+        "цвет",
+        "чихан",
+        "насморк",
+        "поллино",
+        "allergy",
+        "allergic",
+        "pollen",
+    ],
+    "flight": [
+        "перелет",
+        "перелёт",
+        "самолет",
+        "самолёт",
+        "полет",
+        "полёт",
+        "авиа",
+        "flight",
+        "plane",
+    ],
+}
+
+NEGATION_WORDS = ["не", "без", "нет", "никакого", "никакой", "no", "not", "without"]
+NEGATION_WINDOW_CHARS = (
+    15  # ищем отрицание в N символах ДО и ПОСЛЕ найденного ключевого слова
+)
+# ("спорта не было" — отрицание идёт ПОСЛЕ слова, поэтому проверяем оба направления)
+
+FLAG_ORDER = ["sport", "sickness", "stress", "allergy", "flight"]
+
+# Кириллические/разговорные названия препаратов -> канонiческое имя,
+# под которым они, вероятнее всего, хранятся в таблице medicine (см. db.py).
+MEDICINE_ALIASES = {
+    "симбикорт": "Symbicort Turbuhaler",
+    "турбухалер": "Symbicort Turbuhaler",
+    "сальбутамол": "Salbutamol",
+    "вентолин": "Salbutamol",
+    "релвар": "Relvar Ellipta",
+    "эллипта": "Relvar Ellipta",
+    "пульмикорт": "Pulmicort",
+    "формисонид": "Formisonid",
+    "формотерол": "Formisonid",
+}
+
+# Единицы дозировки — числа перед/после них не считаем показанием пикфлоу
+DOSE_UNIT_PATTERN = re.compile(
+    r"(?:мг|мкг|mg|mcg|доз[аиы]?|вдох|puff|puffs|раз[а]?)", re.IGNORECASE
+)
+
+
+def detect_state(text: str) -> dict:
+    """Возвращает {'sport': bool, 'sickness': bool, 'stress': bool, 'allergy': bool, 'flight': bool}."""
+    flags = {f: False for f in FLAG_ORDER}
+    if not text:
+        return flags
+
+    lower = text.lower()
+    for flag, keywords in STATE_KEYWORDS.items():
+        for kw in keywords:
+            idx = lower.find(kw)
+            if idx == -1:
+                continue
+            window_start = max(0, idx - NEGATION_WINDOW_CHARS)
+            window_end = min(len(lower), idx + len(kw) + NEGATION_WINDOW_CHARS)
+            surrounding = (
+                lower[window_start:idx] + " " + lower[idx + len(kw) : window_end]
+            )
+            negated = any(
+                re.search(rf"\b{neg}\b", surrounding) for neg in NEGATION_WORDS
+            )
+            if not negated:
+                flags[flag] = True
+            break  # одного совпадения на флаг достаточно
+    return flags
+
+
+def _find_medicine_mentions(lower_text: str, known_medicines: list[str]) -> list[dict]:
+    """Ищет упоминания препаратов: сначала по алиасам, потом по токенам известных названий."""
+    mentions = []  # [{"name": ..., "span": (start, end)}]
+    used_spans = []
+
+    def overlaps(span):
+        return any(not (span[1] <= s[0] or span[0] >= s[1]) for s in used_spans)
+
+    # 1) алиасы (кириллица/разговорные варианты)
+    for alias, canonical in MEDICINE_ALIASES.items():
+        idx = lower_text.find(alias)
+        if idx != -1:
+            span = (idx, idx + len(alias))
+            if not overlaps(span):
+                # если такое лекарство уже есть в базе — берём его точное написание
+                exact = next(
+                    (m for m in known_medicines if m.lower() == canonical.lower()),
+                    canonical,
+                )
+                mentions.append({"name": exact, "span": span})
+                used_spans.append(span)
+
+    # 2) точные/частичные совпадения по уже известным в БД препаратам
+    for med in known_medicines:
+        for token in med.lower().split():
+            if len(token) < 4:  # короткие токены слишком шумные ("на", "де" и т.п.)
+                continue
+            idx = lower_text.find(token)
+            if idx != -1:
+                span = (idx, idx + len(token))
+                if not overlaps(span):
+                    mentions.append({"name": med, "span": span})
+                    used_spans.append(span)
+                break
+
+    return mentions
+
+
+def _find_dose_near(text: str, span: tuple, window: int = 15) -> int:
+    start = max(0, span[0] - window)
+    end = min(len(text), span[1] + window)
+    nearby = text[start:end]
+    for match in re.finditer(r"\b(\d{1,2})\b", nearby):
+        value = int(match.group(1))
+        if 1 <= value <= 10:
+            return value
+    return 1  # по умолчанию — один приём
+
+
+def extract_peak_flow_values(text: str) -> list:
+    """Достаёт правдоподобные показания пикфлоу (100-900), игнорируя числа, к которым
+    непосредственно примыкает единица дозировки (например, '200мкг')."""
+    values = []
+    for match in re.finditer(r"(?<!\d)(\d{3})(?!\d)", text):
+        start, end = match.span()
+        context_after = text[end : end + 6]
+        if re.match(
+            r"^\s{0,2}" + DOSE_UNIT_PATTERN.pattern, context_after, re.IGNORECASE
+        ):
+            continue
+        value = int(match.group(1))
+        if 100 <= value <= 900:
+            values.append(value)
+    return values
+
+
+def parse_log_message(text: str, known_medicines: list) -> dict:
+    """
+    Разбирает одно свободное сообщение на:
+      - peak_flow: список найденных показаний (обычно 1-3)
+      - medicines: [{"name": str, "dose": int}]
+      - flags: результат detect_state
+    """
+    known_medicines = known_medicines or []
+    peak_flow = extract_peak_flow_values(text)
+    flags = detect_state(text)
+
+    lower = text.lower()
+    mentions = _find_medicine_mentions(lower, known_medicines)
+    medicines = []
+    seen_names = set()
+    for m in mentions:
+        if m["name"] in seen_names:
+            continue
+        seen_names.add(m["name"])
+        dose = _find_dose_near(text, m["span"])
+        medicines.append({"name": m["name"], "dose": dose})
+
+    return {
+        "peak_flow": peak_flow,
+        "medicines": medicines,
+        "flags": flags,
+        "raw_text": text,
+    }
+
+
+# --- Как расширить до "настоящего" NLP через LLM (опционально, для сложных фраз) ---
+# Если rule-based слой не находит флагов/показаний в сообщении, можно одним
+# дополнительным вызовом попросить Claude API вернуть строго JSON вида
+# {"sport": bool, "sickness": bool, "stress": bool, "allergy": bool, "flight": bool,
+#  "peak_flow": [int, ...], "medicines": [{"name": str, "dose": int}]}
+# и слить результат с этим модулем (rule-based — как быстрый и бесплатный первый
+# проход, LLM — только как fallback для нестандартных формулировок).

@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Peak Flow — дневник дыхания</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <header class="app-header">
+    <div class="breath-mark" aria-hidden="true">
+      <svg viewBox="0 0 64 64" width="34" height="34">
+        <circle class="breath-ring breath-ring--outer" cx="32" cy="32" r="26" />
+        <circle class="breath-ring breath-ring--inner" cx="32" cy="32" r="15" />
+      </svg>
+    </div>
+    <div class="header-text">
+      <h1>Peak Flow</h1>
+      <p>дневник дыхания и умный контроль астмы</p>
+    </div>
+    <button id="uploadBtn" class="icon-btn" title="Загрузить историю (CSV/Excel)" aria-label="Загрузить файл">
+      <svg viewBox="0 0 24 24" width="20" height="20"><path d="M12 16V4M12 4L7 9M12 4l5 5M4 20h16" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <input type="file" id="fileInput" accept=".csv,.xlsx,.xls" hidden />
+  </header>
+
+  <main id="chat" class="chat" aria-live="polite"></main>
+
+  <div id="quickReplies" class="quick-replies"></div>
+
+  <footer class="composer">
+    <input id="textInput" type="text" placeholder="Например: 450 460 470 спорт, сальбутамол 2 дозы" autocomplete="off" />
+    <button id="sendBtn" class="send-btn" aria-label="Отправить">
+      <svg viewBox="0 0 24 24" width="20" height="20"><path d="M3 11l18-8-8 18-2-8-8-2z" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linejoin="round" stroke-linecap="round"/></svg>
+    </button>
+  </footer>
+
+  <script src="script.js"></script>
+</body>
+</html>
