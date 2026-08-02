@@ -1,26 +1,27 @@
 """
-Модуль работы с базой данных Peak Flow бота.
+Репозиторий основной БД Peak Flow: пользователи, препараты, показания, зоны, импорт файлов.
 
-Ключевые изменения по сравнению со старой версией (main.py):
+Это единственный слой, который знает SQL и структуру таблиц users / medicine /
+taken_medicine / extra_info / readings. Сервисы обращаются сюда, а не пишут SQL сами.
+
+Ключевые особенности (важно сохранить при дальнейших изменениях):
 1. Зоны (зелёная/жёлтая/красная) считаются НЕ по последним 20 записям подряд,
    а как "personal best" (лучший результат) в скользящем окне по ДАТЕ
    (по умолчанию 90 дней) — это ближе к принятой методике пикфлоуметрии
    и не даёт одному плохому дню резко "обрушить" границы зон.
-2. Уже сохранённые исторические зоны не считаются заново на каждый чих:
-   для новой записи считается на момент её даты, для импорта — один
-   проход rolling-окном по всей истории.
-3. Импорт файлов больше не пытается вставить несуществующую в таблице
-   readings колонку "Extra info" (это было причиной падения при загрузке
-   xlsx/csv в старой версии).
-4. Препараты, встреченные в файле, но отсутствующие в таблице medicine,
+2. Импорт файлов не пытается вставить несуществующую в таблице readings
+   колонку "Extra info" — это было причиной падения при загрузке xlsx/csv
+   в самой первой версии бота.
+3. Препараты, встреченные в файле, но отсутствующие в таблице medicine,
    создаются автоматически, а не приводят к KeyError.
 """
 
 import sqlite3
-from dataclasses import dataclass
 from datetime import datetime
 
 import pandas as pd
+
+from models.domain import ZoneThresholds
 
 DB_PATH = "peak_flow.db"
 
@@ -111,8 +112,7 @@ def init_db(db_path: str = DB_PATH) -> None:
         """
     )
 
-    # ВАЖНО: без "Extra info" — этой колонки в readings больше нет.
-    # Именно её наличие в readings_cols ломало импорт файлов в старой версии.
+    # ВАЖНО: без "Extra info" — этой колонки в readings нет (см. докстринг модуля).
     c.execute(
         """
         CREATE TABLE IF NOT EXISTS readings (
@@ -164,12 +164,53 @@ def get_or_create_medicine_id(
     return c.lastrowid
 
 
-@dataclass
-class ZoneThresholds:
-    personal_best: float
-    green_zone: float  # нижняя граница зелёной зоны
-    yellow_zone: float  # нижняя граница жёлтой зоны
-    red_zone: float = 0.0  # нижняя граница красной зоны (всегда 0)
+def upsert_medicine(
+    conn: sqlite3.Connection, medicine_name: str, dose: str = ""
+) -> None:
+    """Добавляет препарат или обновляет дозу существующего (medicine_name уникален)."""
+    conn.execute(
+        """
+        INSERT INTO medicine (medicine_name, dose) VALUES (?, ?)
+        ON CONFLICT(medicine_name) DO UPDATE SET dose = excluded.dose
+        """,
+        (medicine_name, dose),
+    )
+    conn.commit()
+
+
+def list_medicine_names(conn: sqlite3.Connection) -> list:
+    return [
+        row[0] for row in conn.execute("SELECT medicine_name FROM medicine").fetchall()
+    ]
+
+
+def add_taken_medicine(
+    conn: sqlite3.Connection, medicine_id: int, user_id: str, doses: int, date_str: str
+) -> None:
+    conn.execute(
+        "INSERT INTO taken_medicine (medicine_id, user_id, doses, date) VALUES (?, ?, ?, ?)",
+        (medicine_id, user_id, doses, date_str),
+    )
+
+
+def add_extra_info(
+    conn: sqlite3.Connection, user_id: str, date_str: str, flags: dict
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO extra_info (user_id, date, sport, sickness, stress, allergy, flight)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            user_id,
+            date_str,
+            flags.get("sport", False),
+            flags.get("sickness", False),
+            flags.get("stress", False),
+            flags.get("allergy", False),
+            flags.get("flight", False),
+        ),
+    )
 
 
 def calculate_zone_thresholds(
@@ -231,7 +272,7 @@ def insert_reading(
     first_try: float,
     second_try: float,
     third_try: float,
-) -> tuple[int, ZoneThresholds, str]:
+) -> tuple:
     """Вставляет новую запись и сразу считает для неё зоны. Возвращает (id, thresholds, zone_name)."""
     maximum = max(first_try, second_try, third_try)
     date_str = date if isinstance(date, str) else date.strftime("%Y-%m-%d %H:%M:%S")
@@ -239,7 +280,6 @@ def insert_reading(
     thresholds = calculate_zone_thresholds(
         conn, user_id, date, DEFAULT_ZONE_WINDOW_DAYS
     )
-    # Если это первая запись пользователя, personal best = сама эта запись
     if thresholds is None:
         thresholds = ZoneThresholds(
             personal_best=maximum,
@@ -247,7 +287,6 @@ def insert_reading(
             yellow_zone=round(maximum * YELLOW_RATIO, 1),
         )
     else:
-        # personal best должен учитывать и текущую запись
         pb = max(thresholds.personal_best, maximum)
         thresholds = ZoneThresholds(
             personal_best=pb,
@@ -283,10 +322,7 @@ def insert_reading(
 def recalculate_zones_for_user_history(
     conn: sqlite3.Connection, user_id: str, window_days: int = DEFAULT_ZONE_WINDOW_DAYS
 ) -> int:
-    """
-    Пересчитывает green_zone/yellow_zone для ВСЕЙ истории пользователя
-    (используется после массового импорта). Возвращает число обновлённых строк.
-    """
+    """Пересчитывает green_zone/yellow_zone для ВСЕЙ истории пользователя (после импорта)."""
     df = pd.read_sql(
         "SELECT id, date, maximum FROM readings WHERE user_id = ? ORDER BY date",
         conn,
@@ -297,12 +333,12 @@ def recalculate_zones_for_user_history(
 
     df["date"] = pd.to_datetime(df["date"])
     df = df.set_index("date")
-    # rolling по времени: максимум Maximum за окно window_days дней, включая текущий день
     personal_best = df["maximum"].rolling(f"{window_days}D", min_periods=1).max()
 
     updates = []
-    for (idx, row), pb in zip(df.reset_index().iterrows(), personal_best.values):
-        row_id = df.reset_index().iloc[idx]["id"]
+    reset = df.reset_index()
+    for idx, pb in zip(reset.index, personal_best.values):
+        row_id = reset.iloc[idx]["id"]
         green = round(pb * GREEN_RATIO, 1)
         yellow = round(pb * YELLOW_RATIO, 1)
         updates.append((green, yellow, 0.0, int(row_id)))
@@ -330,11 +366,9 @@ def _parse_extra_info_cell(cell: str) -> dict:
 
 def import_dataframe(conn: sqlite3.Connection, df: pd.DataFrame, user_id: str) -> dict:
     """
-    Импортирует датафрейм в ожидаемом формате (как в исходном xlsx пользователя):
-    First try, Second try, Third try, Maximum, Date, <названия препаратов...>,
-    Green Zone, Yellow Zone, Red Zone (игнорируются — пересчитываются), Extra info.
-
-    Возвращает статистику импорта.
+    Импортирует датафрейм в ожидаемом формате: First try, Second try, Third try,
+    Maximum, Date, <названия препаратов...>, Green/Yellow/Red Zone (игнорируются —
+    пересчитываются), Extra info. Возвращает статистику импорта.
     """
     df = df.copy()
     df.columns = [str(c).strip() for c in df.columns]
@@ -361,7 +395,6 @@ def import_dataframe(conn: sqlite3.Connection, df: pd.DataFrame, user_id: str) -
     }
     medicine_cols = [c for c in df.columns if c not in known_non_medicine_cols]
 
-    # Гарантируем, что все встреченные препараты есть в таблице medicine
     for med_name in medicine_cols:
         get_or_create_medicine_id(conn, med_name)
 
@@ -403,34 +436,16 @@ def import_dataframe(conn: sqlite3.Connection, df: pd.DataFrame, user_id: str) -
             if pd.isna(doses) or doses == 0:
                 continue
             medicine_id = get_or_create_medicine_id(conn, med_name)
-            conn.execute(
-                "INSERT INTO taken_medicine (medicine_id, user_id, doses, date) VALUES (?, ?, ?, ?)",
-                (medicine_id, user_id, int(doses), date_str),
-            )
+            add_taken_medicine(conn, medicine_id, user_id, int(doses), date_str)
             doses_inserted += 1
 
         if "Extra info" in df.columns:
             flags = _parse_extra_info_cell(row.get("Extra info"))
             if any(flags.values()):
-                conn.execute(
-                    """
-                    INSERT INTO extra_info (user_id, date, sport, sickness, stress, allergy, flight)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        user_id,
-                        date_str,
-                        flags["sport"],
-                        flags["sickness"],
-                        flags["stress"],
-                        flags["allergy"],
-                        flags["flight"],
-                    ),
-                )
+                add_extra_info(conn, user_id, date_str, flags)
                 extra_info_inserted += 1
 
     conn.commit()
-
     updated_zone_rows = recalculate_zones_for_user_history(conn, user_id)
 
     return {
@@ -441,3 +456,41 @@ def import_dataframe(conn: sqlite3.Connection, df: pd.DataFrame, user_id: str) -
         "zone_rows_recalculated": updated_zone_rows,
         "bad_dates_skipped": int(bad_dates),
     }
+
+
+# ---------------------------------------------------------------------------
+# Выборки для аналитики/графиков (используются services/analytics_service.py).
+# Репозиторий отдаёт "сырые" DataFrame — вся агрегация/визуализация уже в сервисе.
+# ---------------------------------------------------------------------------
+def fetch_readings_df(
+    conn: sqlite3.Connection, user_id: str, where_clause: str, params: tuple
+) -> pd.DataFrame:
+    return pd.read_sql(
+        f"SELECT date, maximum FROM readings WHERE user_id=? AND {where_clause} AND maximum IS NOT NULL ORDER BY date",
+        conn,
+        params=(user_id, *params),
+    )
+
+
+def fetch_flags_df(
+    conn: sqlite3.Connection, user_id: str, where_clause: str, params: tuple
+) -> pd.DataFrame:
+    return pd.read_sql(
+        f"SELECT date, sport, sickness, stress, allergy, flight FROM extra_info WHERE user_id=? AND {where_clause}",
+        conn,
+        params=(user_id, *params),
+    )
+
+
+def fetch_medicine_doses_df(
+    conn: sqlite3.Connection, user_id: str, where_clause_tm: str, params: tuple
+) -> pd.DataFrame:
+    return pd.read_sql(
+        f"""
+        SELECT tm.date, m.medicine_name, tm.doses FROM taken_medicine tm
+        JOIN medicine m ON m.medicine_id = tm.medicine_id
+        WHERE tm.user_id=? AND {where_clause_tm}
+        """,
+        conn,
+        params=(user_id, *params),
+    )

@@ -26,7 +26,7 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 
-import db as dbmod
+from repositories import database as dbmod
 
 FLAG_COLUMNS = ["sport", "sickness", "stress", "allergy", "flight"]
 
