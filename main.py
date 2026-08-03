@@ -36,7 +36,7 @@ app.include_router(chat.router)
 app.include_router(upload.router)
 app.include_router(notifications.router)
 
-SERVER_HOST = "127.0.0.1"
+SERVER_HOST = "localhost"
 SERVER_PORT = 8080
 
 

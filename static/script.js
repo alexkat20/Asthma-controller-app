@@ -17,6 +17,7 @@ const textInput = document.getElementById("textInput");
 const sendBtn = document.getElementById("sendBtn");
 const uploadBtn = document.getElementById("uploadBtn");
 const fileInput = document.getElementById("fileInput");
+const micBtn = document.getElementById("micBtn");
 
 function detectZoneClass(text) {
   if (text.includes("🔴")) return "zone-red";
@@ -129,6 +130,97 @@ fileInput.addEventListener("change", async () => {
   }
   fileInput.value = "";
 });
+
+// Голосовой ввод (Web Speech API). Поддерживается не всеми браузерами (уверенно —
+// Chrome/Edge на десктопе и Android; Safari/Firefox — ограниченно или никак),
+// поэтому кнопка показывается только если API реально доступен.
+//
+// Важно: браузеры разрешают доступ к микрофону только в защищённом контексте —
+// https:// или http://localhost. Если сайт открыт по обычному http:// с IP-адреса
+// или доменного имени, микрофон работать не будет — это ограничение браузера,
+// а не баг приложения.
+const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
+let recognition = null;
+let isListening = false;
+
+const SPEECH_ERROR_MESSAGES = {
+  "not-allowed": "Нет доступа к микрофону — разрешите его в настройках браузера (значок замка рядом с адресом сайта).",
+  "service-not-allowed": "Браузер заблокировал доступ к сервису распознавания речи.",
+  "audio-capture": "Не нашёл микрофон — проверьте, что он подключён и не занят другим приложением.",
+  "network": "Проблема с сетью при распознавании речи — проверьте соединение и попробуйте ещё раз.",
+  "no-speech": "Не расслышал — попробуйте сказать ещё раз, ближе к микрофону.",
+  "aborted": null, // штатная остановка (например, пользователь сам нажал "стоп") — сообщение не нужно
+};
+
+function resetMicUi() {
+  isListening = false;
+  micBtn.classList.remove("listening");
+}
+
+if (SpeechRecognitionCtor) {
+  micBtn.hidden = false;
+  recognition = new SpeechRecognitionCtor();
+  recognition.lang = "ru-RU";
+  recognition.interimResults = true;
+  recognition.continuous = false;
+
+  recognition.addEventListener("start", () => {
+    isListening = true;
+    micBtn.classList.add("listening");
+  });
+
+  recognition.addEventListener("result", (event) => {
+    let transcript = "";
+    for (let i = 0; i < event.results.length; i++) {
+      transcript += event.results[i][0].transcript;
+    }
+    textInput.value = transcript;
+  });
+
+  recognition.addEventListener("error", (event) => {
+    const message = SPEECH_ERROR_MESSAGES[event.error];
+    if (message) addSystemNote(message);
+    else if (message === undefined) addSystemNote(`Ошибка распознавания речи: ${event.error}.`);
+    resetMicUi();
+  });
+
+  recognition.addEventListener("end", () => {
+    resetMicUi();
+    textInput.focus();
+  });
+
+  micBtn.addEventListener("click", () => {
+    if (isListening) {
+      try {
+        recognition.stop();
+      } catch (err) {
+        resetMicUi();
+      }
+      return;
+    }
+
+    if (!window.isSecureContext) {
+      addSystemNote(
+        "Голосовой ввод работает только по https:// (или на localhost). Откройте сайт по защищённому адресу."
+      );
+      return;
+    }
+
+    textInput.value = "";
+    try {
+      recognition.start();
+    } catch (err) {
+      // Чаще всего InvalidStateError — recognition уже запущен (двойной клик и т.п.).
+      // Просто пересоздаём объект распознавания, чтобы не зависнуть в сломанном состоянии.
+      resetMicUi();
+      recognition = new SpeechRecognitionCtor();
+      recognition.lang = "ru-RU";
+      recognition.interimResults = true;
+      recognition.continuous = false;
+      addSystemNote("Не удалось начать запись — попробуйте нажать ещё раз.");
+    }
+  });
+}
 
 // Поллинг фоновых уведомлений (напоминания, ежедневный прогноз)
 async function pollNotifications() {

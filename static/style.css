@@ -219,6 +219,24 @@ body {
 }
 .send-btn:active { transform: scale(0.92); }
 
+.mic-btn {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-left: 0;
+}
+.mic-btn.listening {
+  border-color: var(--red);
+  color: #fff;
+  background: var(--red);
+  animation: mic-pulse 1.4s ease-in-out infinite;
+}
+@keyframes mic-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(209, 67, 67, 0.35); }
+  50% { box-shadow: 0 0 0 8px rgba(209, 67, 67, 0); }
+}
+
 @media (max-width: 480px) {
   .bubble { max-width: 88%; }
 }

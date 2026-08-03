@@ -184,6 +184,13 @@ def list_medicine_names(conn: sqlite3.Connection) -> list:
     ]
 
 
+def list_medicines_with_doses(conn: sqlite3.Connection) -> list:
+    """Возвращает [(medicine_name, dose), ...] — для кнопок выбора препарата в диалоге."""
+    return conn.execute(
+        "SELECT medicine_name, dose FROM medicine ORDER BY medicine_name"
+    ).fetchall()
+
+
 def add_taken_medicine(
     conn: sqlite3.Connection, medicine_id: int, user_id: str, doses: int, date_str: str
 ) -> None:

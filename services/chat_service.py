@@ -37,7 +37,8 @@ HELP_WORDS = {"помощь", "команды", "help", "?"}
 
 def get_session(user_id: str) -> dict:
     return SESSIONS.setdefault(
-        user_id, {"awaiting_period": None, "awaiting_medicine_name": False}
+        user_id,
+        {"awaiting_period": None, "awaiting_medicine_name": False, "log_step": None},
     )
 
 
@@ -56,7 +57,7 @@ def process_message(user_id: str, text: str) -> ChatOut:
     if tl in ("изменить профиль", "редактировать профиль", "обновить профиль"):
         return profile_service.start_onboarding(session)
 
-    if tl in ("профиль", "мой профиль"):
+    if "профиль" in tl:
         return ChatOut(
             reply=profile_service.show_profile(user_id), quick_replies=MAIN_MENU
         )
@@ -64,6 +65,9 @@ def process_message(user_id: str, text: str) -> ChatOut:
     if tl in GREETINGS:
         session["awaiting_period"] = None
         session["awaiting_medicine_name"] = False
+        session["log_step"] = None
+        session.pop("log_data", None)
+        session.pop("medicine_options", None)
         return ChatOut(reply=welcome_text(), quick_replies=MAIN_MENU)
 
     if tl in HELP_WORDS:
@@ -90,6 +94,15 @@ def process_message(user_id: str, text: str) -> ChatOut:
             reply, images = analytics_service.run_plot(user_id, days, custom)
         return ChatOut(reply=reply, images=images, quick_replies=MAIN_MENU)
 
+    # Мастер записи показаний (шаги: показания -> препарат -> количество доз)
+    log_step = session.get("log_step")
+    if log_step == "reading":
+        return logging_service.handle_reading_input(user_id, session, t)
+    if log_step == "medicine":
+        return logging_service.handle_medicine_step(user_id, session, t)
+    if log_step == "dose_count":
+        return logging_service.handle_dose_count_step(user_id, session, t)
+
     if "анализ" in tl:
         session["awaiting_period"] = "analysis"
         return ChatOut(
@@ -106,7 +119,7 @@ def process_message(user_id: str, text: str) -> ChatOut:
         reply, images = analytics_service.run_predict(user_id)
         return ChatOut(reply=reply, images=images, quick_replies=MAIN_MENU)
 
-    if "напомни" in tl:
+    if "напомин" in tl:
         return ChatOut(
             reply=reminder_service.handle_reminder_command(user_id, t),
             quick_replies=MAIN_MENU,
@@ -125,20 +138,22 @@ def process_message(user_id: str, text: str) -> ChatOut:
             reply=location_service.run_allergy_check(user_id), quick_replies=MAIN_MENU
         )
 
+    if "записать показания" in tl or tl in (
+        "запись",
+        "показания",
+        "новая запись",
+        "записать",
+    ):
+        return logging_service.prompt_reading_entry(session)
+
     if "лекарств" in tl or "препарат" in tl:
         session["awaiting_medicine_name"] = True
         return ChatOut(
             reply="Введите название и дозу через точку с запятой, например: «Симбикорт; 2 дозы»."
         )
 
-    if "мой профиль" in tl:
-        return ChatOut(
-            reply=profile_service.show_profile(user_id), quick_replies=MAIN_MENU
-        )
-
-    # иначе пробуем разобрать как запись показаний
-    reply = logging_service.run_smart_log(user_id, t)
-    if reply is not None:
-        return ChatOut(reply=reply, quick_replies=MAIN_MENU)
+    # иначе, если сообщение похоже на показания (три и более числа) — начинаем запись
+    if logging_service.looks_like_reading(t):
+        return logging_service.handle_reading_input(user_id, session, t)
 
     return ChatOut(reply=help_text(), quick_replies=MAIN_MENU)
