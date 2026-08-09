@@ -12,6 +12,7 @@ class ChatOut(BaseModel):
     reply: str
     quick_replies: list = []
     images: list = []
+    download_url: str | None = None
 
 
 class UploadOut(BaseModel):

@@ -9,7 +9,12 @@ function getUserId() {
   return id;
 }
 
-const USER_ID = getUserId();
+// Семейный доступ: ссылка вида /?view=TOKEN — используем токен как идентификатор
+// для запросов вместо своего user_id, и НЕ сохраняем его в localStorage, чтобы
+// обычный визит на тот же браузер (без ?view=) не застревал в режиме просмотра.
+const VIEW_TOKEN = new URLSearchParams(window.location.search).get("view");
+const IS_READ_ONLY = Boolean(VIEW_TOKEN);
+const USER_ID = VIEW_TOKEN || getUserId();
 
 const chatEl = document.getElementById("chat");
 const quickRepliesEl = document.getElementById("quickReplies");
@@ -26,7 +31,7 @@ function detectZoneClass(text) {
   return "";
 }
 
-function addBubble(text, who, images = []) {
+function addBubble(text, who, images = [], downloadUrl = null) {
   const bubble = document.createElement("div");
   bubble.className = `bubble ${who}`;
   if (who === "bot") {
@@ -40,6 +45,15 @@ function addBubble(text, who, images = []) {
     img.alt = "график";
     bubble.appendChild(img);
   });
+  if (downloadUrl) {
+    const link = document.createElement("a");
+    link.href = downloadUrl;
+    link.target = "_blank";
+    link.rel = "noopener";
+    link.className = "report-link";
+    link.textContent = "📄 Открыть отчёт";
+    bubble.appendChild(link);
+  }
   chatEl.appendChild(bubble);
   chatEl.scrollTop = chatEl.scrollHeight;
   return bubble;
@@ -96,7 +110,7 @@ async function sendMessage(text) {
     });
     const data = await res.json();
     hideTyping();
-    addBubble(data.reply, "bot", data.images);
+    addBubble(data.reply, "bot", data.images, data.download_url);
     setQuickReplies(data.quick_replies);
   } catch (err) {
     hideTyping();
@@ -245,11 +259,22 @@ async function initGreeting() {
     });
     const data = await res.json();
     hideTyping();
-    addBubble(data.reply, "bot", data.images);
+    addBubble(data.reply, "bot", data.images, data.download_url);
     setQuickReplies(data.quick_replies);
   } catch (err) {
     hideTyping();
     addBubble("Не получилось связаться с сервером. Проверьте, что бэкенд запущен.", "bot");
   }
 }
-window.addEventListener("DOMContentLoaded", initGreeting);
+window.addEventListener("DOMContentLoaded", () => {
+  if (IS_READ_ONLY) {
+    // Загрузка истории — это запись данных, в режиме "только чтение" её не показываем.
+    uploadBtn.hidden = true;
+
+    const banner = document.createElement("div");
+    banner.className = "readonly-banner";
+    banner.textContent = "👪 Режим семейного доступа — только просмотр";
+    document.querySelector(".app-header").insertAdjacentElement("afterend", banner);
+  }
+  initGreeting();
+});

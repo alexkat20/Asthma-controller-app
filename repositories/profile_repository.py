@@ -53,6 +53,26 @@ def get_profile(user_id: str):
     }
 
 
+def get_created_at(user_id: str):
+    conn = get_connection()
+    ensure_profile_table(conn)
+    row = conn.execute(
+        "SELECT created_at FROM user_profile WHERE user_id=?", (user_id,)
+    ).fetchone()
+    conn.close()
+    return row[0] if row else None
+
+
+def list_user_ids() -> list:
+    conn = get_connection()
+    ensure_profile_table(conn)
+    ids = [
+        row[0] for row in conn.execute("SELECT user_id FROM user_profile").fetchall()
+    ]
+    conn.close()
+    return ids
+
+
 def save_profile(user_id: str, data: dict) -> None:
     conn = get_connection()
     ensure_profile_table(conn)

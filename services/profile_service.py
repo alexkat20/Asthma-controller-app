@@ -10,8 +10,8 @@ import re
 
 from models.schemas import ChatOut
 from repositories import profile_repository as profile_repo
-from services import allergy_service, location_service
-from utils.formatting import GENDER_RU, MAIN_MENU, SMOKING_RU, welcome_text
+from services import act_service, allergy_service, location_service
+from utils.formatting import GENDER_RU, SMOKING_RU, welcome_text
 
 ONBOARDING_ORDER = ["gender", "age", "height", "weight", "smoking", "city", "allergies"]
 ONBOARDING_PROMPTS = {
@@ -134,7 +134,14 @@ def continue_onboarding(user_id: str, session: dict, text: str) -> ChatOut:
     if location_reply:
         reply += f"\n\n{location_reply}"
     reply += "\n\n" + welcome_text()
-    return ChatOut(reply=reply, quick_replies=MAIN_MENU)
+    reply += (
+        "\n\nТеперь пройдём короткий тест контроля астмы — это займёт около минуты и станет "
+        "точкой отсчёта (дальше буду предлагать его раз в месяц)."
+    )
+    act_prompt = act_service.start_act(session)
+    return ChatOut(
+        reply=reply + "\n\n" + act_prompt.reply, quick_replies=act_prompt.quick_replies
+    )
 
 
 def show_profile(user_id: str) -> str:

@@ -14,7 +14,12 @@ from datetime import datetime
 from repositories import settings_repository as settings_repo
 from repositories.database import get_connection
 from repositories.profile_repository import get_profile
-from services import allergy_service, forecast_service, notification_service
+from services import (
+    act_service,
+    allergy_service,
+    forecast_service,
+    notification_service,
+)
 from utils.formatting import ZONE_RU
 
 
@@ -72,7 +77,11 @@ def _scheduler_loop() -> None:
         try:
             _check_reminders()
         except Exception as exc:  # фоновый поток не должен падать целиком из-за одной ошибки
-            print(f"[scheduler] ошибка: {exc}")
+            print(f"[scheduler] ошибка (напоминания): {exc}")
+        try:
+            act_service.check_and_notify_due_users()
+        except Exception as exc:
+            print(f"[scheduler] ошибка (ACT): {exc}")
         time_module.sleep(60)
 
 
