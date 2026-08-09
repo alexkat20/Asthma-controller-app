@@ -38,7 +38,7 @@ def parse_allergen_selection(text: str) -> list:
     lower = text.lower()
     found = []
     for key, label in POLLEN_RU.items():
-        if label.lower() in lower:
+        if label.lower() in lower or label.lower().replace("ё", "е") in lower:
             found.append(key)
     return found
 
