@@ -35,15 +35,7 @@ def recommend_medicine(conn, user_id: str, min_occurrences: int = 3) -> dict | N
        "recovery_rate": float|None, "used": int, "baseline_recovery_rate": float|None,
        "note": str}
     """
-    readings = pd.read_sql(
-        """
-        SELECT date, maximum, green_zone, yellow_zone FROM readings
-        WHERE user_id = ? AND maximum IS NOT NULL AND green_zone IS NOT NULL
-        ORDER BY date
-        """,
-        conn,
-        params=(user_id,),
-    )
+    readings = dbmod.fetch_all_readings_with_zones_df(conn, user_id)
     if readings.empty:
         return None
 
@@ -66,15 +58,7 @@ def recommend_medicine(conn, user_id: str, min_occurrences: int = 3) -> dict | N
     if bad_days.empty:
         return None
 
-    meds = pd.read_sql(
-        """
-        SELECT tm.date, m.medicine_name FROM taken_medicine tm
-        JOIN medicine m ON m.medicine_id = tm.medicine_id
-        WHERE tm.user_id = ?
-        """,
-        conn,
-        params=(user_id,),
-    )
+    meds = dbmod.fetch_all_taken_medicine_with_names_df(conn, user_id)
     if meds.empty:
         return None
     meds["day"] = pd.to_datetime(meds["date"]).dt.normalize()

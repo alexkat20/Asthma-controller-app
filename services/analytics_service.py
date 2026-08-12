@@ -11,15 +11,15 @@ import seaborn as sns
 
 from repositories import database as db
 from services import forecast_service
-from utils.dates import adapt_where_for_alias, build_date_filter
+from utils.dates import ALL_TIME, build_date_filter
 from utils.formatting import FLAG_RU, ZONE_RU
 from utils.plotting import fig_to_data_uri
 
 
 def run_analysis(user_id: str, days, custom_range) -> tuple:
-    where, extra_params, label = build_date_filter(days, custom_range)
+    start_str, end_str, label = build_date_filter(days, custom_range)
     conn = db.get_connection()
-    df = db.fetch_readings_df(conn, user_id, where, extra_params)
+    df = db.fetch_readings_df(conn, user_id, start_str, end_str)
     if df.empty:
         conn.close()
         return f"Нет данных за {label}.", []
@@ -28,10 +28,8 @@ def run_analysis(user_id: str, days, custom_range) -> tuple:
     df["day_key"] = df["date"].dt.normalize()
     daily = df.groupby("day_key", as_index=False)["maximum"].mean()
 
-    flags = db.fetch_flags_df(conn, user_id, where, extra_params)
-    meds = db.fetch_medicine_doses_df(
-        conn, user_id, adapt_where_for_alias(where, "tm"), extra_params
-    )
+    flags = db.fetch_flags_df(conn, user_id, start_str, end_str)
+    meds = db.fetch_medicine_doses_df(conn, user_id, start_str, end_str)
     conn.close()
 
     merged = daily.copy()
@@ -102,16 +100,16 @@ def run_analysis(user_id: str, days, custom_range) -> tuple:
 
 
 def run_plot(user_id: str, days, custom_range) -> tuple:
-    where, extra_params, label = build_date_filter(days, custom_range)
+    start_str, end_str, label = build_date_filter(days, custom_range)
     conn = db.get_connection()
-    df = db.fetch_readings_df(conn, user_id, where, extra_params)
+    df = db.fetch_readings_df(conn, user_id, start_str, end_str)
     thresholds = db.calculate_zone_thresholds(conn, user_id, datetime.now())
     conn.close()
 
     if df.empty:
         return f"Нет данных за {label}.", []
 
-    df["date"] = pd.to_datetime(df["date"])
+    df["date"] = pd.to_datetime(df["date"]).dt.date
 
     plt.figure(figsize=(8, 4))
     if thresholds:
@@ -137,6 +135,10 @@ def run_plot(user_id: str, days, custom_range) -> tuple:
     plt.grid(alpha=0.3)
     plt.xticks(rotation=40)
     plt.legend()
+    print(df)
+    if not (custom_range is None and days == ALL_TIME):
+        plt.xlim(pd.to_datetime(start_str), pd.to_datetime(end_str))
+
     image = fig_to_data_uri()
 
     return f"📈 График за {label}.", [image]

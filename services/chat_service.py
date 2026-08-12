@@ -12,17 +12,22 @@
 заблокирована на уровне роутинга (см. _process_read_only).
 """
 
+import re
+
 from models.schemas import ChatOut
 from repositories.profile_repository import profile_exists
 from services import (
     act_service,
     analytics_service,
+    export_service,
     family_service,
     location_service,
     logging_service,
     medicine_service,
     profile_service,
     reminder_service,
+    table_service,
+    treatment_plan_service,
 )
 from utils.dates import QUICK_PERIODS, parse_period
 from utils.formatting import (
@@ -50,14 +55,36 @@ GREETINGS = {
 HELP_WORDS = {"помощь", "команды", "help", "?"}
 
 
+def _export_download_url(user_id: str, days, custom_range) -> str:
+    if custom_range:
+        start, end = custom_range
+        return f"/api/export/{user_id}?start={start:%Y-%m-%d}&end={end:%Y-%m-%d}"
+    return f"/api/export/{user_id}?days={days}"
+
+
 def get_session(user_id: str) -> dict:
     return SESSIONS.setdefault(
         user_id,
         {
             "awaiting_period": None,
             "awaiting_medicine_name": False,
+            "awaiting_table_days": False,
             "log_step": None,
             "act_step": None,
+            "plan_step": None,
+        },
+    )
+
+
+def _table_days_prompt() -> ChatOut:
+    return ChatOut(
+        reply="За сколько последних дней показать таблицу?",
+        slider={
+            "min": table_service.MIN_DAYS,
+            "max": table_service.MAX_DAYS,
+            "default": table_service.DEFAULT_DAYS,
+            "label": "Дней",
+            "unit": "дн.",
         },
     )
 
@@ -95,9 +122,32 @@ def _process_read_only(user_id: str, session: dict, t: str, tl: str) -> ChatOut:
         session["awaiting_period"] = None
         if kind == "analysis":
             reply, images = analytics_service.run_analysis(user_id, days, custom)
-        else:
+        elif kind == "plot":
             reply, images = analytics_service.run_plot(user_id, days, custom)
+        else:
+            return ChatOut(
+                reply="📄 Экспорт готов — файл начнёт скачиваться автоматически.",
+                quick_replies=READ_ONLY_MENU,
+                download_url=_export_download_url(user_id, days, custom),
+            )
         return ChatOut(reply=reply, images=images, quick_replies=READ_ONLY_MENU)
+
+    if session.get("awaiting_table_days"):
+        session["awaiting_table_days"] = False
+        m = re.search(r"\d+", t)
+        days = int(m.group(0)) if m else table_service.DEFAULT_DAYS
+        caption, table = table_service.build_table_data(user_id, days)
+        return ChatOut(reply=caption, table=table, quick_replies=READ_ONLY_MENU)
+
+    if "таблиц" in tl:
+        session["awaiting_table_days"] = True
+        return _table_days_prompt()
+
+    if "экспорт" in tl or "скачать данные" in tl or "выгрузить" in tl:
+        session["awaiting_period"] = "export"
+        return ChatOut(
+            reply="За какой период выгрузить данные?", quick_replies=QUICK_PERIODS
+        )
 
     if "анализ" in tl:
         session["awaiting_period"] = "analysis"
@@ -118,6 +168,12 @@ def _process_read_only(user_id: str, session: dict, t: str, tl: str) -> ChatOut:
     if "аллерг" in tl or "пыльц" in tl:
         return ChatOut(
             reply=location_service.run_allergy_check(user_id),
+            quick_replies=READ_ONLY_MENU,
+        )
+
+    if "план лечения" in tl or "назначения врача" in tl or "план врача" in tl:
+        return ChatOut(
+            reply=treatment_plan_service.show_plan(user_id),
             quick_replies=READ_ONLY_MENU,
         )
 
@@ -189,11 +245,17 @@ def _process_full(user_id: str, session: dict, t: str, tl: str) -> ChatOut:
         session["awaiting_period"] = None
         if kind == "analysis":
             reply, images = analytics_service.run_analysis(user_id, days, custom)
-        else:
+        elif kind == "plot":
             reply, images = analytics_service.run_plot(user_id, days, custom)
+        else:
+            return ChatOut(
+                reply="📄 Экспорт готов — файл начнёт скачиваться автоматически.",
+                quick_replies=MAIN_MENU,
+                download_url=_export_download_url(user_id, days, custom),
+            )
         return ChatOut(reply=reply, images=images, quick_replies=MAIN_MENU)
 
-    # Мастер записи показаний (шаги: показания -> препарат -> количество доз)
+    # Мастер записи показаний (шаги: показания -> препарат -> доза -> приступы -> состояние)
     log_step = session.get("log_step")
     if log_step == "reading":
         return logging_service.handle_reading_input(user_id, session, t)
@@ -201,10 +263,44 @@ def _process_full(user_id: str, session: dict, t: str, tl: str) -> ChatOut:
         return logging_service.handle_medicine_step(user_id, session, t)
     if log_step == "dose_count":
         return logging_service.handle_dose_count_step(user_id, session, t)
+    if log_step == "attacks":
+        return logging_service.handle_attacks_step(user_id, session, t)
+    if log_step == "state":
+        return logging_service.handle_state_step(user_id, session, t)
+
+    # Мастер плана лечения (3 шага подряд)
+    if session.get("plan_step") is not None:
+        return treatment_plan_service.continue_plan_edit(user_id, session, t)
+
+    if "изменить план" in tl or "обновить план" in tl or "заполнить план" in tl:
+        return treatment_plan_service.start_plan_edit(session)
+
+    if "план лечения" in tl or "назначения врача" in tl or "план врача" in tl:
+        return ChatOut(
+            reply=treatment_plan_service.show_plan(user_id),
+            quick_replies=["✏️ Изменить план"] + MAIN_MENU,
+        )
 
     # Тест контроля астмы (5 вопросов подряд)
     if session.get("act_step") is not None:
         return act_service.continue_act(user_id, session, t)
+
+    if session.get("awaiting_table_days"):
+        session["awaiting_table_days"] = False
+        m = re.search(r"\d+", t)
+        days = int(m.group(0)) if m else table_service.DEFAULT_DAYS
+        caption, table = table_service.build_table_data(user_id, days)
+        return ChatOut(reply=caption, table=table, quick_replies=MAIN_MENU)
+
+    if "таблиц" in tl:
+        session["awaiting_table_days"] = True
+        return _table_days_prompt()
+
+    if "экспорт" in tl or "скачать данные" in tl or "выгрузить" in tl:
+        session["awaiting_period"] = "export"
+        return ChatOut(
+            reply="За какой период выгрузить данные?", quick_replies=QUICK_PERIODS
+        )
 
     if "анализ" in tl:
         session["awaiting_period"] = "analysis"

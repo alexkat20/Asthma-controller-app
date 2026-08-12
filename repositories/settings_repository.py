@@ -1,81 +1,54 @@
 """Репозиторий вспомогательных настроек: местоположение пользователя и напоминания."""
 
-import sqlite3
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
-
-def ensure_location_table(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS user_location (
-            user_id TEXT PRIMARY KEY, city_label TEXT, lat REAL, lon REAL
-        )
-        """
-    )
+from repositories.orm_models import Reminder, UserLocation
 
 
 def save_user_location(
-    conn: sqlite3.Connection, user_id: str, label: str, lat: float, lon: float
+    conn: Session, user_id: str, label: str, lat: float, lon: float
 ) -> None:
-    ensure_location_table(conn)
-    conn.execute(
-        """
-        INSERT INTO user_location (user_id, city_label, lat, lon) VALUES (?, ?, ?, ?)
-        ON CONFLICT(user_id) DO UPDATE SET city_label=excluded.city_label, lat=excluded.lat, lon=excluded.lon
-        """,
-        (user_id, label, lat, lon),
-    )
+    existing = conn.get(UserLocation, user_id)
+    if existing:
+        existing.city_label = label
+        existing.lat = lat
+        existing.lon = lon
+    else:
+        conn.add(UserLocation(user_id=user_id, city_label=label, lat=lat, lon=lon))
     conn.commit()
 
 
-def get_user_location(conn: sqlite3.Connection, user_id: str):
-    ensure_location_table(conn)
-    row = conn.execute(
-        "SELECT city_label, lat, lon FROM user_location WHERE user_id=?", (user_id,)
-    ).fetchone()
+def get_user_location(conn: Session, user_id: str):
+    row = conn.get(UserLocation, user_id)
     if row is None:
         return None
-    return {"label": row[0], "lat": row[1], "lon": row[2]}
+    return {"label": row.city_label, "lat": row.lat, "lon": row.lon}
 
 
-def ensure_reminders_table(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS reminders (
-            user_id TEXT PRIMARY KEY, hour INTEGER, minute INTEGER, last_sent TEXT
-        )
-        """
-    )
-
-
-def upsert_reminder(
-    conn: sqlite3.Connection, user_id: str, hour: int, minute: int
-) -> None:
-    ensure_reminders_table(conn)
-    conn.execute(
-        """
-        INSERT INTO reminders (user_id, hour, minute, last_sent) VALUES (?, ?, ?, NULL)
-        ON CONFLICT(user_id) DO UPDATE SET hour = excluded.hour, minute = excluded.minute
-        """,
-        (user_id, hour, minute),
-    )
+def upsert_reminder(conn: Session, user_id: str, hour: int, minute: int) -> None:
+    existing = conn.get(Reminder, user_id)
+    if existing:
+        existing.hour = hour
+        existing.minute = minute
+    else:
+        conn.add(Reminder(user_id=user_id, hour=hour, minute=minute, last_sent=None))
     conn.commit()
 
 
-def get_reminder(conn: sqlite3.Connection, user_id: str):
-    ensure_reminders_table(conn)
-    return conn.execute(
-        "SELECT hour, minute FROM reminders WHERE user_id=?", (user_id,)
-    ).fetchone()
+def get_reminder(conn: Session, user_id: str):
+    row = conn.get(Reminder, user_id)
+    return (row.hour, row.minute) if row else None
 
 
-def get_all_reminders(conn: sqlite3.Connection) -> list:
-    ensure_reminders_table(conn)
-    return conn.execute(
-        "SELECT user_id, hour, minute, last_sent FROM reminders"
-    ).fetchall()
+def get_all_reminders(conn: Session) -> list:
+    rows = conn.execute(
+        select(Reminder.user_id, Reminder.hour, Reminder.minute, Reminder.last_sent)
+    ).all()
+    return [(r.user_id, r.hour, r.minute, r.last_sent) for r in rows]
 
 
-def mark_reminder_sent(conn: sqlite3.Connection, user_id: str, date_str: str) -> None:
-    conn.execute(
-        "UPDATE reminders SET last_sent=? WHERE user_id=?", (date_str, user_id)
-    )
+def mark_reminder_sent(conn: Session, user_id: str, date_str: str) -> None:
+    reminder = conn.get(Reminder, user_id)
+    if reminder:
+        reminder.last_sent = date_str

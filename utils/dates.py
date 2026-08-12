@@ -1,7 +1,11 @@
-"""Разбор периодов ('неделя', '2 недели', произвольный диапазон дат) для анализа/графиков."""
+"""Разбор периодов ('неделя', '2 недели', произвольный диапазон дат) для анализа/графиков/экспорта."""
 
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
+
+ALL_TIME = (
+    -1
+)  # сентинел для «всё время»: отдельно от None, который означает «период не распознан»
 
 PERIOD_DAYS = {
     "неделя": 7,
@@ -17,16 +21,27 @@ PERIOD_DAYS = {
     "quarter": 90,
     "год": 365,
     "year": 365,
+    "всё время": ALL_TIME,
+    "все время": ALL_TIME,
+    "всё": ALL_TIME,
+    "all": ALL_TIME,
 }
-QUICK_PERIODS = ["Неделя", "2 недели", "Месяц", "Квартал", "Год"]
+QUICK_PERIODS = ["Неделя", "2 недели", "Месяц", "Квартал", "Год", "Всё время"]
 
 CUSTOM_RANGE_RE = re.compile(
     r"(\d{1,2}\.\d{1,2}\.\d{4})\s*[-–—]\s*(\d{1,2}\.\d{1,2}\.\d{4})"
 )
 
+DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+EARLIEST_POSSIBLE_DATE = datetime(
+    1970, 1, 1
+)  # для периода "всё время" — нижняя граница без верхнего предела
+
 
 def parse_period(text: str):
-    """Возвращает (days, None) для именованного периода или (None, (start, end)) для диапазона дат."""
+    """Возвращает (days, None) для именованного периода (days=ALL_TIME означает
+    'всё время') или (None, (start, end)) для произвольного диапазона дат.
+    (None, None) — период не распознан."""
     t = text.strip().lower()
     if t in PERIOD_DAYS:
         return PERIOD_DAYS[t], None
@@ -42,28 +57,36 @@ def parse_period(text: str):
 
 
 def build_date_filter(days, custom_range):
-    """Возвращает (where_clause, params, человекочитаемая_метка_периода)."""
+    """
+    Возвращает (start_str, end_str, человекочитаемая_метка_периода) — обе
+    границы уже посчитаны в Python и отформатированы как обычные строки
+    "%Y-%m-%d %H:%M:%S". Раньше здесь собиралась SQLite-специфичная
+    SQL-строка с функцией datetime('now', ?), которая работала только на
+    SQLite — на PostgreSQL синтаксис вычисления интервалов другой. Вычисляя
+    границы в Python и сравнивая обычные строки (формат лексикографически
+    сортируется), код работает одинаково на обоих бэкендах без каких-либо
+    SQL-функций, специфичных для диалекта.
+    """
     if custom_range:
         start, end = custom_range
         return (
-            "date >= ? AND date <= ?",
-            (start.strftime("%Y-%m-%d 00:00:00"), end.strftime("%Y-%m-%d 23:59:59")),
+            start.strftime("%Y-%m-%d 00:00:00"),
+            end.strftime("%Y-%m-%d 23:59:59"),
             f"{start.date().strftime('%d.%m.%Y')}—{end.date().strftime('%d.%m.%Y')}",
         )
-    return (
-        "date >= datetime('now', ?)",
-        (f"-{days} days",),
-        {7: "неделю", 14: "2 недели", 30: "месяц", 90: "квартал", 365: "год"}.get(
-            days, f"{days} дн."
-        ),
-    )
 
+    end = datetime.now()
+    if days == ALL_TIME:
+        start = EARLIEST_POSSIBLE_DATE
+        label = "всё время"
+    else:
+        start = end - timedelta(days=days)
+        label = {
+            7: "неделя",
+            14: "2 недели",
+            30: "месяц",
+            90: "квартал",
+            365: "год",
+        }.get(days, f"{days} дн.")
 
-def adapt_where_for_alias(where_clause: str, alias: str) -> str:
-    """Подставляет алиас таблицы перед 'date' в WHERE-условии (не трогая 'datetime(...)').
-
-    Например: "date >= datetime('now', ?)" -> "tm.date >= datetime('now', ?)"
-    Наивный str.replace здесь сломал бы 'datetime(...)' на 'tm.datetime(...)' —
-    поэтому используется regex с границей слова.
-    """
-    return re.sub(r"(?<![a-z])date(?![a-z])", f"{alias}.date", where_clause)
+    return start.strftime(DATE_FORMAT), end.strftime(DATE_FORMAT), label

@@ -1,19 +1,25 @@
 """
-Запись показаний пикфлоуметрии — пошаговый диалог (не одно свободное сообщение):
+Запись показаний пикфлоуметрии — пошаговый диалог, различающий утро и вечер:
 
-  1) пользователь сам вводит три показания (числа через пробел/запятую)
-  2) препарат выбирается из предложенных кнопок (со стандартной дозой из БД)
-  3) количество принятых доз/вдохов — целое число
+  УТРО (до MORNING_CUTOFF_HOUR по локальному времени сервера):
+    1) три показания — и всё, сразу сохраняем.
 
-Состояние текущего шага живёт в session (см. services/chat_service.py):
-  session["log_step"]  — None | "reading" | "medicine" | "dose_count"
-  session["log_data"]  — накопленные на текущий момент данные записи
+  ВЕЧЕР (после MORNING_CUTOFF_HOUR):
+    1) три показания
+    2) препарат из справочника кнопками (или свой вариант)
+    3) количество принятых доз/вдохов
+    4) количество приступов за день
+    5) состояние (спорт/стресс/аллергия/болезнь/перелёт)
+
+Раньше все эти данные спрашивались всегда одинаково, независимо от времени
+суток. Теперь это осознанное разделение: препараты/приступы/состояние —
+вечерняя сводка дня целиком, утром человек ещё не знает, каким будет день,
+поэтому имеет смысл спросить только объективный показатель.
+
+Состояние мастера — в session (см. services/chat_service.py):
+  session["log_step"] — None | "reading" | "medicine" | "dose_count" | "attacks" | "state"
+  session["log_data"] — накопленные на текущий момент данные записи
   session["medicine_options"] — {текст_кнопки: имя_препарата_или_None} для шага 2
-
-Состояние человека (спорт/стресс/аллергия/...) отдельным шагом не запрашивается —
-чтобы не удлинять диалог, оно молча извлекается NLP-детектором из текста
-показаний, если пользователь сам упомянул его в том же сообщении
-(например: «450 460 470 занимался спортом»).
 """
 
 import re
@@ -21,10 +27,24 @@ from datetime import datetime
 
 from models.schemas import ChatOut
 from repositories import database as db
-from services import nlp_service, recommend_service
+from services import nlp_service, recommend_service, treatment_plan_service
 from utils.formatting import FLAG_RU, MAIN_MENU, ZONE_RU
 
+MORNING_CUTOFF_HOUR = (
+    12  # до этого часа — утренняя (только показания), после — вечерняя запись
+)
+
 NO_MEDICINE_LABEL = "Без препарата"
+NO_STATE_LABEL = "Ничего из этого"
+STATE_QUICK_REPLIES = [
+    "Спорт",
+    "Стресс",
+    "Аллергия",
+    "Болезнь",
+    "Перелёт",
+    NO_STATE_LABEL,
+]
+ATTACKS_QUICK_REPLIES = ["0", "1", "2", "3"]
 
 
 def _extract_numbers(text: str) -> list:
@@ -36,12 +56,34 @@ def looks_like_reading(text: str) -> bool:
     return len(_extract_numbers(text)) >= 3
 
 
+def _is_evening(now: datetime) -> bool:
+    return now.hour >= MORNING_CUTOFF_HOUR
+
+
 def prompt_reading_entry(session: dict) -> ChatOut:
     """Явный старт мастера записи (например, по команде «записать показания»)."""
     session["log_step"] = "reading"
     session["log_data"] = {}
     return ChatOut(
         reply="Введите три показания пикфлоуметра через пробел, например: 450 460 470."
+    )
+
+
+def _prompt_attacks_step(session: dict) -> ChatOut:
+    session["log_step"] = "attacks"
+    return ChatOut(
+        reply="Сколько приступов было сегодня?", quick_replies=ATTACKS_QUICK_REPLIES
+    )
+
+
+def _prompt_state_step(session: dict) -> ChatOut:
+    session["log_step"] = "state"
+    return ChatOut(
+        reply=(
+            "Было ли сегодня что-то из этого: спорт, стресс, аллергия, болезнь, перелёт? "
+            "Перечислите через запятую или выберите «Ничего из этого»."
+        ),
+        quick_replies=STATE_QUICK_REPLIES,
     )
 
 
@@ -56,6 +98,16 @@ def handle_reading_input(user_id: str, session: dict, text: str) -> ChatOut:
         )
 
     values = numbers[:3]
+    now = datetime.now()
+
+    if not _is_evening(now):
+        # Утренняя запись — только показания, без препаратов/приступов/состояния.
+        session["log_step"] = None
+        return _finalize(user_id, {"values": values}, now)
+
+    # Вечерняя запись — предзаполняем состояние тем, что детектор сам найдёт в
+    # тексте показаний (вдруг пользователь сразу написал "550 560 600 после пробежки"),
+    # шаг "состояние" в конце всё равно даст явно подтвердить/дополнить.
     flags = nlp_service.detect_state(text)
     session["log_data"] = {"values": values, "flags": flags}
 
@@ -64,9 +116,8 @@ def handle_reading_input(user_id: str, session: dict, text: str) -> ChatOut:
     conn.close()
 
     if not medicines:
-        # В базе ещё нет ни одного препарата — сохраняем показания сразу, без шагов 2-3.
-        session["log_step"] = None
-        return _finalize(user_id, session)
+        # В базе ещё нет ни одного препарата — пропускаем шаг 2-3, но не приступы/состояние.
+        return _prompt_attacks_step(session)
 
     options = {NO_MEDICINE_LABEL: None}
     quick_replies = []
@@ -88,15 +139,13 @@ def handle_medicine_step(user_id: str, session: dict, text: str) -> ChatOut:
     medicine_name = (
         options[key] if key in options else key
     )  # свой вариант -> создадим такой препарат
+    session.pop("medicine_options", None)
 
     if medicine_name is None:  # выбрали "Без препарата"
-        session["log_step"] = None
-        session.pop("medicine_options", None)
-        return _finalize(user_id, session)
+        return _prompt_attacks_step(session)
 
     session.setdefault("log_data", {})["medicine_name"] = medicine_name
     session["log_step"] = "dose_count"
-    session.pop("medicine_options", None)
     return ChatOut(
         reply=f"Сколько доз/вдохов препарата «{medicine_name}» приняли?",
         quick_replies=["1", "2", "3"],
@@ -112,12 +161,40 @@ def handle_dose_count_step(user_id: str, session: dict, text: str) -> ChatOut:
             quick_replies=["1", "2", "3"],
         )
     session.setdefault("log_data", {})["doses"] = int(m.group(0))
+    return _prompt_attacks_step(session)
+
+
+def handle_attacks_step(user_id: str, session: dict, text: str) -> ChatOut:
+    """Шаг 4: количество приступов за день — целое число (0, если не было)."""
+    m = re.search(r"\d+", text)
+    if not m:
+        return ChatOut(
+            reply="Введите число приступов за сегодня (0, если не было).",
+            quick_replies=ATTACKS_QUICK_REPLIES,
+        )
+    session.setdefault("log_data", {})["attacks_count"] = int(m.group(0))
+    return _prompt_state_step(session)
+
+
+def handle_state_step(user_id: str, session: dict, text: str) -> ChatOut:
+    """Шаг 5: состояние (спорт/стресс/аллергия/болезнь/перелёт) — объединяется
+    с тем, что уже успел распознать детектор на шаге 1 (см. handle_reading_input)."""
+    tl = text.strip().lower()
+    if NO_STATE_LABEL.lower() not in tl and "ничего" not in tl:
+        new_flags = nlp_service.detect_state(text)
+        existing = session.setdefault("log_data", {}).get("flags") or {}
+        merged = {
+            key: existing.get(key, False) or new_flags.get(key, False)
+            for key in FLAG_RU
+        }
+        session["log_data"]["flags"] = merged
+
     session["log_step"] = None
-    return _finalize(user_id, session)
-
-
-def _finalize(user_id: str, session: dict) -> ChatOut:
     data = session.pop("log_data", {})
+    return _finalize(user_id, data, datetime.now())
+
+
+def _finalize(user_id: str, data: dict, now: datetime) -> ChatOut:
     values = data.get("values")
     if not values:
         return ChatOut(
@@ -125,8 +202,8 @@ def _finalize(user_id: str, session: dict) -> ChatOut:
             quick_replies=MAIN_MENU,
         )
 
-    now = datetime.now()
     date_str = now.strftime("%Y-%m-%d %H:%M:%S")
+    record_time = now.strftime("%H:%M")
 
     conn = db.get_connection()
     db.ensure_user(conn, user_id)
@@ -140,8 +217,11 @@ def _finalize(user_id: str, session: dict) -> ChatOut:
         db.add_taken_medicine(conn, medicine_id, user_id, doses, date_str)
 
     flags = data.get("flags") or {}
-    if any(flags.values()):
-        db.add_extra_info(conn, user_id, date_str, flags)
+    attacks_count = data.get("attacks_count")
+    # Утренняя запись (data содержит только "values") — extra_info вообще не создаём,
+    # это осознанное правило: приступы/состояние/препараты — только вечерняя сводка.
+    if attacks_count is not None or any(flags.values()):
+        db.add_extra_info(conn, user_id, date_str, flags, attacks_count, record_time)
     conn.commit()
     conn.close()
 
@@ -150,24 +230,38 @@ def _finalize(user_id: str, session: dict) -> ChatOut:
         "yellow": f"⚠️ Пикфлоу {maximum:.0f} — {ZONE_RU['yellow']} зона ({thresholds.yellow_zone:.0f}–{thresholds.green_zone:.0f}). Стоит понаблюдать за собой.",
         "red": f"🚨 Пикфлоу {maximum:.0f} — {ZONE_RU['red']} зона (<{thresholds.yellow_zone:.0f}). Рекомендуется консультация врача.",
     }
-    med_str = f"{medicine_name} × {doses}" if medicine_name and doses else "не указано"
-    flags_str = ", ".join(FLAG_RU[f] for f, v in flags.items() if v) or "не указано"
+    reply = zone_messages.get(zone, f"Сохранено: максимум {maximum:.0f}")
+    reply += f"\n\nПоказания: {', '.join(str(int(v)) for v in values)}"
 
-    recommendation_block = ""
-    if zone in ("yellow", "red"):
-        conn2 = db.get_connection()
-        rec = recommend_service.recommend_medicine(conn2, user_id)
-        conn2.close()
-        if rec:
-            recommendation_block = "\n\n" + recommend_service.format_recommendation(rec)
-
-    return ChatOut(
-        reply=(
-            f"{zone_messages.get(zone, f'Сохранено: максимум {maximum:.0f}')}\n\n"
-            f"Показания: {', '.join(str(int(v)) for v in values)}\n"
-            f"Препарат: {med_str}\n"
+    if attacks_count is not None:
+        med_str = (
+            f"{medicine_name} × {doses}" if medicine_name and doses else "не указано"
+        )
+        flags_str = ", ".join(FLAG_RU[f] for f, v in flags.items() if v) or "не указано"
+        reply += (
+            f"\nПрепарат: {med_str}\n"
+            f"Приступов за день: {attacks_count}\n"
             f"Состояние: {flags_str}"
-            f"{recommendation_block}"
-        ),
-        quick_replies=MAIN_MENU,
-    )
+        )
+
+        # План лечения от врача — приоритетнее статистической рекомендации, если задан.
+        plan_guidance = treatment_plan_service.get_guidance_for_zone(user_id, zone)
+        if plan_guidance:
+            label = "ухудшении" if zone == "yellow" else "приступе"
+            reply += f"\n\n📋 План врача при {label}: {plan_guidance}"
+
+        if attacks_count and attacks_count > 0:
+            attack_plan = treatment_plan_service.get_attack_guidance(user_id)
+            if (
+                attack_plan and zone != "red"
+            ):  # для red уже показали выше как plan_guidance
+                reply += f"\n\n📋 План врача на случай приступа: {attack_plan}"
+
+        if zone in ("yellow", "red") and not plan_guidance:
+            conn2 = db.get_connection()
+            rec = recommend_service.recommend_medicine(conn2, user_id)
+            conn2.close()
+            if rec:
+                reply += "\n\n" + recommend_service.format_recommendation(rec)
+
+    return ChatOut(reply=reply, quick_replies=MAIN_MENU)

@@ -5,61 +5,57 @@
 данных, но никогда не даёт прав на запись (см. services/family_service.py).
 """
 
-import sqlite3
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
-
-def ensure_family_table(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS family_access (
-            token TEXT PRIMARY KEY,
-            owner_user_id TEXT,
-            label TEXT,
-            created_at TEXT,
-            revoked BOOLEAN DEFAULT 0
-        )
-        """
-    )
+from repositories.orm_models import FamilyAccess
 
 
 def create_share(
-    conn: sqlite3.Connection,
-    token: str,
-    owner_user_id: str,
-    label: str,
-    created_at: str,
+    conn: Session, token: str, owner_user_id: str, label: str, created_at: str
 ) -> None:
-    ensure_family_table(conn)
-    conn.execute(
-        "INSERT INTO family_access (token, owner_user_id, label, created_at, revoked) VALUES (?, ?, ?, ?, 0)",
-        (token, owner_user_id, label, created_at),
+    conn.add(
+        FamilyAccess(
+            token=token,
+            owner_user_id=owner_user_id,
+            label=label,
+            created_at=created_at,
+            revoked=False,
+        )
     )
     conn.commit()
 
 
-def get_owner_by_token(conn: sqlite3.Connection, token: str):
-    ensure_family_table(conn)
+def get_owner_by_token(conn: Session, token: str):
     row = conn.execute(
-        "SELECT owner_user_id FROM family_access WHERE token = ? AND revoked = 0",
-        (token,),
-    ).fetchone()
-    return row[0] if row else None
+        select(FamilyAccess.owner_user_id).where(
+            FamilyAccess.token == token, FamilyAccess.revoked.is_(False)
+        )
+    ).scalar_one_or_none()
+    return row
 
 
-def list_shares(conn: sqlite3.Connection, owner_user_id: str) -> list:
-    ensure_family_table(conn)
+def list_shares(conn: Session, owner_user_id: str) -> list:
     rows = conn.execute(
-        "SELECT token, label, created_at FROM family_access WHERE owner_user_id = ? AND revoked = 0 ORDER BY created_at DESC",
-        (owner_user_id,),
-    ).fetchall()
-    return [{"token": r[0], "label": r[1], "created_at": r[2]} for r in rows]
+        select(FamilyAccess.token, FamilyAccess.label, FamilyAccess.created_at)
+        .where(
+            FamilyAccess.owner_user_id == owner_user_id, FamilyAccess.revoked.is_(False)
+        )
+        .order_by(FamilyAccess.created_at.desc())
+    ).all()
+    return [
+        {"token": r.token, "label": r.label, "created_at": r.created_at} for r in rows
+    ]
 
 
-def revoke_share(conn: sqlite3.Connection, owner_user_id: str, token: str) -> bool:
-    ensure_family_table(conn)
-    cur = conn.execute(
-        "UPDATE family_access SET revoked = 1 WHERE token = ? AND owner_user_id = ?",
-        (token, owner_user_id),
-    )
+def revoke_share(conn: Session, owner_user_id: str, token: str) -> bool:
+    row = conn.execute(
+        select(FamilyAccess).where(
+            FamilyAccess.token == token, FamilyAccess.owner_user_id == owner_user_id
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        return False
+    row.revoked = True
     conn.commit()
-    return cur.rowcount > 0
+    return True

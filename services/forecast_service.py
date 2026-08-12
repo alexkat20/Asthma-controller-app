@@ -21,7 +21,7 @@
 на выборке из нескольких сотен точек.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import numpy as np
 import pandas as pd
@@ -32,31 +32,20 @@ FLAG_COLUMNS = ["sport", "sickness", "stress", "allergy", "flight"]
 
 
 def _load_history(conn, user_id: str, lookback_days: int = 365) -> pd.DataFrame:
-    df = pd.read_sql(
-        """
-        SELECT date, maximum FROM readings
-        WHERE user_id = ? AND maximum IS NOT NULL
-          AND date >= datetime('now', ?)
-        ORDER BY date
-        """,
-        conn,
-        params=(user_id, f"-{lookback_days} days"),
+    since_str = (datetime.now() - timedelta(days=lookback_days)).strftime(
+        dbmod.DATE_FORMAT
     )
+    df = dbmod.fetch_history_since_df(conn, user_id, since_str)
     if not df.empty:
         df["date"] = pd.to_datetime(df["date"])
     return df
 
 
 def _load_flags(conn, user_id: str, lookback_days: int = 365) -> pd.DataFrame:
-    df = pd.read_sql(
-        f"""
-        SELECT date, {", ".join(FLAG_COLUMNS)} FROM extra_info
-        WHERE user_id = ? AND date >= datetime('now', ?)
-        ORDER BY date
-        """,
-        conn,
-        params=(user_id, f"-{lookback_days} days"),
+    since_str = (datetime.now() - timedelta(days=lookback_days)).strftime(
+        dbmod.DATE_FORMAT
     )
+    df = dbmod.fetch_flags_since_df(conn, user_id, since_str)
     if not df.empty:
         df["date"] = pd.to_datetime(df["date"]).dt.normalize()
     return df

@@ -23,6 +23,11 @@ const sendBtn = document.getElementById("sendBtn");
 const uploadBtn = document.getElementById("uploadBtn");
 const fileInput = document.getElementById("fileInput");
 const micBtn = document.getElementById("micBtn");
+const sliderWidget = document.getElementById("sliderWidget");
+const sliderLabel = document.getElementById("sliderLabel");
+const sliderInput = document.getElementById("sliderInput");
+const sliderValue = document.getElementById("sliderValue");
+const sliderConfirmBtn = document.getElementById("sliderConfirmBtn");
 
 function detectZoneClass(text) {
   if (text.includes("🔴")) return "zone-red";
@@ -31,7 +36,7 @@ function detectZoneClass(text) {
   return "";
 }
 
-function addBubble(text, who, images = [], downloadUrl = null) {
+function addBubble(text, who, images = [], downloadUrl = null, tableData = null) {
   const bubble = document.createElement("div");
   bubble.className = `bubble ${who}`;
   if (who === "bot") {
@@ -54,9 +59,113 @@ function addBubble(text, who, images = [], downloadUrl = null) {
     link.textContent = "📄 Открыть отчёт";
     bubble.appendChild(link);
   }
+  if (tableData) {
+    bubble.appendChild(renderInteractiveTable(tableData));
+  }
   chatEl.appendChild(bubble);
   chatEl.scrollTop = chatEl.scrollHeight;
   return bubble;
+}
+
+// Интерактивная таблица истории (см. models/schemas.py::ChatOut.table). В отличие
+// от графиков (картинка), это настоящий <table> в DOM — можно сортировать по
+// клику на заголовок и фильтровать по препаратам чекбоксами, ничего заново не
+// запрашивая у сервера: все данные периода уже пришли одним ответом.
+function renderInteractiveTable(tableData) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "data-table-wrapper";
+
+  const state = { sortKey: null, sortDir: 1, activeFilters: new Set() };
+
+  if (tableData.medicine_options && tableData.medicine_options.length > 0) {
+    const filterRow = document.createElement("div");
+    filterRow.className = "table-filter-row";
+    tableData.medicine_options.forEach((name) => {
+      const label = document.createElement("label");
+      label.className = "table-filter-chip";
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.addEventListener("change", () => {
+        if (checkbox.checked) state.activeFilters.add(name);
+        else state.activeFilters.delete(name);
+        label.classList.toggle("active", checkbox.checked);
+        renderBody();
+      });
+      label.appendChild(checkbox);
+      label.appendChild(document.createTextNode(" " + name));
+      filterRow.appendChild(label);
+    });
+    wrapper.appendChild(filterRow);
+  }
+
+  const table = document.createElement("table");
+  table.className = "data-table";
+  const thead = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  tableData.columns.forEach((col) => {
+    const th = document.createElement("th");
+    th.textContent = col.label;
+    th.addEventListener("click", () => {
+      const key = col.sortKey || col.key;
+      state.sortDir = state.sortKey === key ? -state.sortDir : 1;
+      state.sortKey = key;
+      renderBody();
+    });
+    headRow.appendChild(th);
+  });
+  thead.appendChild(headRow);
+  table.appendChild(thead);
+
+  const tbody = document.createElement("tbody");
+  table.appendChild(tbody);
+
+  function renderBody() {
+    tbody.innerHTML = "";
+    let rows = tableData.rows.slice();
+
+    if (state.activeFilters.size > 0) {
+      rows = rows.filter((row) => (row.medicines || []).some((m) => state.activeFilters.has(m)));
+    }
+
+    if (state.sortKey) {
+      rows.sort((a, b) => {
+        const va = a[state.sortKey];
+        const vb = b[state.sortKey];
+        if (va == null && vb == null) return 0;
+        if (va == null) return 1;
+        if (vb == null) return -1;
+        if (typeof va === "number" && typeof vb === "number") return (va - vb) * state.sortDir;
+        return String(va).localeCompare(String(vb), "ru") * state.sortDir;
+      });
+    }
+
+    if (rows.length === 0) {
+      const tr = document.createElement("tr");
+      const td = document.createElement("td");
+      td.colSpan = tableData.columns.length;
+      td.className = "table-empty";
+      td.textContent = "Нет записей по выбранному фильтру.";
+      tr.appendChild(td);
+      tbody.appendChild(tr);
+      return;
+    }
+
+    rows.forEach((row) => {
+      const tr = document.createElement("tr");
+      if (row.zone) tr.classList.add(`row-zone-${row.zone}`);
+      tableData.columns.forEach((col) => {
+        const td = document.createElement("td");
+        const value = row[col.key];
+        td.textContent = value === null || value === undefined ? "—" : value;
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    });
+  }
+
+  renderBody();
+  wrapper.appendChild(table);
+  return wrapper;
 }
 
 function addSystemNote(text) {
@@ -93,6 +202,35 @@ function setQuickReplies(list) {
   });
 }
 
+// Слайдер-роллер (например, "за сколько последних дней показать таблицу?").
+// Бэкенд присылает spec {min, max, default, label, unit} в поле slider ответа —
+// см. models/schemas.py::SliderSpec. Значение при подтверждении отправляется
+// обычным текстовым сообщением (тем же путём, что и клик по quick-reply).
+function setSlider(spec) {
+  if (!spec) {
+    sliderWidget.hidden = true;
+    return;
+  }
+  sliderWidget.hidden = false;
+  sliderLabel.textContent = spec.label || "";
+  sliderInput.min = spec.min;
+  sliderInput.max = spec.max;
+  sliderInput.value = spec.default;
+  sliderValue.textContent = `${spec.default}${spec.unit ? " " + spec.unit : ""}`;
+  sliderInput.dataset.unit = spec.unit || "";
+}
+
+sliderInput.addEventListener("input", () => {
+  const unit = sliderInput.dataset.unit || "";
+  sliderValue.textContent = `${sliderInput.value}${unit ? " " + unit : ""}`;
+});
+
+sliderConfirmBtn.addEventListener("click", () => {
+  const value = sliderInput.value;
+  setSlider(null);
+  sendMessage(value);
+});
+
 async function sendMessage(text) {
   const trimmed = (text ?? textInput.value).trim();
   if (!trimmed) return;
@@ -100,6 +238,7 @@ async function sendMessage(text) {
   addBubble(trimmed, "user");
   textInput.value = "";
   setQuickReplies([]);
+  setSlider(null);
   showTyping();
 
   try {
@@ -110,8 +249,9 @@ async function sendMessage(text) {
     });
     const data = await res.json();
     hideTyping();
-    addBubble(data.reply, "bot", data.images, data.download_url);
+    addBubble(data.reply, "bot", data.images, data.download_url, data.table);
     setQuickReplies(data.quick_replies);
+    setSlider(data.slider);
   } catch (err) {
     hideTyping();
     addBubble("Не получилось связаться с сервером. Проверьте, что бэкенд запущен.", "bot");
@@ -259,8 +399,9 @@ async function initGreeting() {
     });
     const data = await res.json();
     hideTyping();
-    addBubble(data.reply, "bot", data.images, data.download_url);
+    addBubble(data.reply, "bot", data.images, data.download_url, data.table);
     setQuickReplies(data.quick_replies);
+    setSlider(data.slider);
   } catch (err) {
     hideTyping();
     addBubble("Не получилось связаться с сервером. Проверьте, что бэкенд запущен.", "bot");

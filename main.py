@@ -20,7 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 
-from endpoints import chat, notifications, report, upload
+from endpoints import chat, notifications, report, upload, export
 from repositories.database import init_db
 from services.reminder_service import start_scheduler
 
@@ -38,6 +38,7 @@ app.include_router(chat.router)
 app.include_router(upload.router)
 app.include_router(notifications.router)
 app.include_router(report.router)
+app.include_router(export.router)
 
 
 @app.on_event("startup")

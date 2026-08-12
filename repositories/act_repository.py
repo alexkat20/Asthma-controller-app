@@ -3,86 +3,62 @@
 
 Сортировка "последний результат" — по id (autoincrement), а не по строке date:
 при двух тестах в одну и ту же секунду (например, в тестах или если кто-то
-пройдёт тест дважды подряд) сравнение строк даты даёт ничью, и SQLite не
-гарантирует порядок при равенстве ключа сортировки — id монотонно растёт
-с вставкой и однозначно отражает порядок прохождения тестов.
+пройдёт тест дважды подряд) сравнение строк даты даёт ничью, и ни SQLite, ни
+PostgreSQL не гарантируют порядок при равенстве ключа сортировки — id
+монотонно растёт с вставкой и однозначно отражает порядок прохождения тестов.
 """
 
-import sqlite3
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
-
-def ensure_act_table(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS act_results (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT,
-            date TEXT,
-            answers TEXT,
-            total_score INTEGER
-        )
-        """
-    )
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS act_notify_state (
-            user_id TEXT PRIMARY KEY,
-            last_notified_date TEXT
-        )
-        """
-    )
+from repositories.orm_models import ActNotifyState, ActResult
 
 
 def save_act_result(
-    conn: sqlite3.Connection,
-    user_id: str,
-    answers: list,
-    total_score: int,
-    date_str: str,
+    conn: Session, user_id: str, answers: list, total_score: int, date_str: str
 ) -> None:
-    ensure_act_table(conn)
-    conn.execute(
-        "INSERT INTO act_results (user_id, date, answers, total_score) VALUES (?, ?, ?, ?)",
-        (user_id, date_str, ",".join(str(a) for a in answers), total_score),
+    conn.add(
+        ActResult(
+            user_id=user_id,
+            date=date_str,
+            answers=",".join(str(a) for a in answers),
+            total_score=total_score,
+        )
     )
     conn.commit()
 
 
-def get_last_act(conn: sqlite3.Connection, user_id: str):
-    ensure_act_table(conn)
+def get_last_act(conn: Session, user_id: str):
     row = conn.execute(
-        "SELECT date, total_score FROM act_results WHERE user_id=? ORDER BY id DESC LIMIT 1",
-        (user_id,),
-    ).fetchone()
+        select(ActResult.date, ActResult.total_score)
+        .where(ActResult.user_id == user_id)
+        .order_by(ActResult.id.desc())
+        .limit(1)
+    ).first()
     if row is None:
         return None
-    return {"date": row[0], "total_score": row[1]}
+    return {"date": row.date, "total_score": row.total_score}
 
 
-def get_act_history(conn: sqlite3.Connection, user_id: str, limit: int = 12) -> list:
-    ensure_act_table(conn)
+def get_act_history(conn: Session, user_id: str, limit: int = 12) -> list:
     rows = conn.execute(
-        "SELECT date, total_score FROM act_results WHERE user_id=? ORDER BY id DESC LIMIT ?",
-        (user_id, limit),
-    ).fetchall()
-    return [{"date": r[0], "total_score": r[1]} for r in rows]
+        select(ActResult.date, ActResult.total_score)
+        .where(ActResult.user_id == user_id)
+        .order_by(ActResult.id.desc())
+        .limit(limit)
+    ).all()
+    return [{"date": r.date, "total_score": r.total_score} for r in rows]
 
 
-def get_last_notified(conn: sqlite3.Connection, user_id: str):
-    ensure_act_table(conn)
-    row = conn.execute(
-        "SELECT last_notified_date FROM act_notify_state WHERE user_id=?", (user_id,)
-    ).fetchone()
-    return row[0] if row else None
+def get_last_notified(conn: Session, user_id: str):
+    row = conn.get(ActNotifyState, user_id)
+    return row.last_notified_date if row else None
 
 
-def mark_notified(conn: sqlite3.Connection, user_id: str, date_str: str) -> None:
-    ensure_act_table(conn)
-    conn.execute(
-        """
-        INSERT INTO act_notify_state (user_id, last_notified_date) VALUES (?, ?)
-        ON CONFLICT(user_id) DO UPDATE SET last_notified_date = excluded.last_notified_date
-        """,
-        (user_id, date_str),
-    )
+def mark_notified(conn: Session, user_id: str, date_str: str) -> None:
+    existing = conn.get(ActNotifyState, user_id)
+    if existing:
+        existing.last_notified_date = date_str
+    else:
+        conn.add(ActNotifyState(user_id=user_id, last_notified_date=date_str))
     conn.commit()

@@ -161,6 +161,76 @@ body {
 }
 .report-link:hover { opacity: 0.9; }
 
+/* ---------- Интерактивная таблица истории ---------- */
+.data-table-wrapper {
+  margin-top: 10px;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.table-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.table-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px 10px 4px 8px;
+  font-size: 12px;
+  color: var(--ink-soft);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.table-filter-chip.active {
+  border-color: var(--teal);
+  color: var(--teal);
+  background: rgba(47, 168, 160, 0.08);
+}
+.table-filter-chip input { accent-color: var(--teal); cursor: pointer; }
+
+.data-table {
+  border-collapse: collapse;
+  min-width: 100%;
+  font-size: 12.5px;
+}
+
+.data-table th {
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+  border-bottom: 2px solid var(--line);
+  padding: 6px 10px;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  color: var(--ink-soft);
+}
+.data-table th:hover { color: var(--teal); }
+.data-table th::after { content: " ⇅"; opacity: 0.35; font-size: 10px; }
+
+.data-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+
+.data-table tr.row-zone-green td { background: var(--green-bg); }
+.data-table tr.row-zone-yellow td { background: var(--amber-bg); }
+.data-table tr.row-zone-red td { background: var(--red-bg); }
+
+.table-empty {
+  text-align: center;
+  color: var(--ink-soft);
+  padding: 14px !important;
+}
+
 .bubble.system {
   align-self: center;
   background: transparent;
@@ -203,6 +273,80 @@ body {
   transition: background .15s, color .15s;
 }
 .chip:hover { background: var(--teal); color: #fff; }
+
+/* ---------- Slider (роллер количества дней) ---------- */
+.slider-widget {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 18px;
+  flex-shrink: 0;
+}
+.slider-widget[hidden] {
+  display: none;
+}
+
+.slider-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+}
+
+.slider-label {
+  font-size: 13px;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.slider-value {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--teal);
+  min-width: 28px;
+  text-align: right;
+}
+
+#sliderInput {
+  flex: 1;
+  -webkit-appearance: none;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--line);
+  outline: none;
+}
+#sliderInput::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--gradient);
+  cursor: pointer;
+  border: 2px solid #fff;
+  box-shadow: 0 1px 3px rgba(20, 40, 40, 0.25);
+}
+#sliderInput::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--teal);
+  cursor: pointer;
+  border: 2px solid #fff;
+  box-shadow: 0 1px 3px rgba(20, 40, 40, 0.25);
+}
+
+.slider-confirm-btn {
+  border: none;
+  background: var(--gradient);
+  color: #fff;
+  padding: 8px 16px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-family: 'Inter', sans-serif;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.slider-confirm-btn:active { transform: scale(0.96); }
 
 /* ---------- Composer ---------- */
 .composer {

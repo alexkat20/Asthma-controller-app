@@ -17,7 +17,7 @@ from repositories import act_repository as act_repo
 from repositories import database as db
 from repositories import profile_repository as profile_repo
 from services import analytics_service
-from utils.dates import adapt_where_for_alias
+from utils.dates import build_date_filter
 from utils.formatting import GENDER_RU, SMOKING_RU
 
 REPORT_PERIOD_DAYS = 90
@@ -80,12 +80,9 @@ def _zone_block(user_id: str) -> str:
 
 
 def _medicine_usage_block(user_id: str, days: int) -> str:
-    where = "date >= datetime('now', ?)"
-    params = (f"-{days} days",)
+    start_str, end_str, _ = build_date_filter(days, None)
     conn = db.get_connection()
-    meds = db.fetch_medicine_doses_df(
-        conn, user_id, adapt_where_for_alias(where, "tm"), params
-    )
+    meds = db.fetch_medicine_doses_df(conn, user_id, start_str, end_str)
     conn.close()
     if meds.empty:
         return "<p>Нет данных о приёме препаратов за период.</p>"
