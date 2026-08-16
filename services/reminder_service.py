@@ -1,25 +1,24 @@
 """
-Напоминания: команда «напоминание HH:MM» + фоновый планировщик, который раз в
-минуту проверяет, кому пора отправить утренний дайджест (прогноз + пыльца).
+Напоминания: команда «напоминание HH:MM» + проверка (check_reminders), кому
+пора отправить утренний дайджест (прогноз + пыльца).
+
+Сама периодичность («раз в минуту, для всех пользователей») теперь не здесь —
+это делает отдельный процесс scheduler_worker.py, вызывающий check_reminders()
+и act_service.check_and_notify_due_users() по таймеру. Раньше это был
+threading.Thread внутри веб-процесса — с несколькими воркерами/инстансами
+получили бы N параллельных планировщиков и N уведомлений вместо одного.
 
 Без Telegram push уведомление кладётся в очередь (notification_service), а
 забирает её фронтенд поллингом.
 """
 
 import re
-import threading
-import time as time_module
 from datetime import datetime
 
 from repositories import settings_repository as settings_repo
 from repositories.database import get_connection
 from repositories.profile_repository import get_profile
-from services import (
-    act_service,
-    allergy_service,
-    forecast_service,
-    notification_service,
-)
+from services import allergy_service, forecast_service, notification_service
 from utils.formatting import ZONE_RU
 
 
@@ -60,7 +59,10 @@ def _send_daily_digest(conn, user_id: str) -> None:
     notification_service.push(user_id, msg)
 
 
-def _check_reminders() -> None:
+def check_reminders() -> None:
+    """Вызывается из scheduler_worker.py по таймеру (раньше был приватным
+    _check_reminders, вызывавшимся только из потока внутри этого же модуля —
+    теперь легитимно вызывается извне, поэтому без ведущего подчёркивания)."""
     conn = get_connection()
     now = datetime.now()
     today_str = now.strftime("%Y-%m-%d")
@@ -70,20 +72,3 @@ def _check_reminders() -> None:
             settings_repo.mark_reminder_sent(conn, user_id, today_str)
     conn.commit()
     conn.close()
-
-
-def _scheduler_loop() -> None:
-    while True:
-        try:
-            _check_reminders()
-        except Exception as exc:  # фоновый поток не должен падать целиком из-за одной ошибки
-            print(f"[scheduler] ошибка (напоминания): {exc}")
-        try:
-            act_service.check_and_notify_due_users()
-        except Exception as exc:
-            print(f"[scheduler] ошибка (ACT): {exc}")
-        time_module.sleep(60)
-
-
-def start_scheduler() -> None:
-    threading.Thread(target=_scheduler_loop, daemon=True).start()

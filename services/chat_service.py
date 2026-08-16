@@ -13,8 +13,11 @@
 """
 
 import re
+from datetime import datetime
 
 from models.schemas import ChatOut
+from repositories import database as db
+from repositories import session_repository
 from repositories.profile_repository import profile_exists
 from services import (
     act_service,
@@ -39,7 +42,14 @@ from utils.formatting import (
     welcome_text,
 )
 
-SESSIONS: dict = {}
+_DEFAULT_SESSION = {
+    "awaiting_period": None,
+    "awaiting_medicine_name": False,
+    "awaiting_table_days": False,
+    "log_step": None,
+    "act_step": None,
+    "plan_step": None,
+}
 
 GREETINGS = {
     "начать",
@@ -63,17 +73,30 @@ def _export_download_url(user_id: str, days, custom_range) -> str:
 
 
 def get_session(user_id: str) -> dict:
-    return SESSIONS.setdefault(
-        user_id,
-        {
-            "awaiting_period": None,
-            "awaiting_medicine_name": False,
-            "awaiting_table_days": False,
-            "log_step": None,
-            "act_step": None,
-            "plan_step": None,
-        },
-    )
+    """Загружает состояние диалога из БД (см. repositories/session_repository.py).
+    Раньше это был просто SESSIONS.setdefault(user_id, {...}) — обычный Python
+    dict в памяти процесса. Работало только при одном веб-воркере: с несколькими
+    воркерами/инстансами каждый видел свою половину диалога независимо от
+    остальных (подтверждено на практике — см. историю изменений). Теперь
+    состояние в БД, поэтому неважно, какой процесс обработал запрос."""
+    conn = db.get_connection()
+    try:
+        stored = session_repository.load_session(conn, user_id)
+    finally:
+        conn.close()
+    session = dict(_DEFAULT_SESSION)
+    session.update(stored)
+    return session
+
+
+def _persist_session(user_id: str, session: dict) -> None:
+    conn = db.get_connection()
+    try:
+        session_repository.save_session(
+            conn, user_id, session, datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        )
+    finally:
+        conn.close()
 
 
 def _table_days_prompt() -> ChatOut:
@@ -101,9 +124,12 @@ def process_message(user_id: str, text: str) -> ChatOut:
 
     effective_user_id, read_only = family_service.resolve_viewer(user_id)
     if read_only:
-        return _process_read_only(effective_user_id, session, t, tl)
+        result = _process_read_only(effective_user_id, session, t, tl)
+    else:
+        result = _process_full(effective_user_id, session, t, tl)
 
-    return _process_full(effective_user_id, session, t, tl)
+    _persist_session(user_id, session)
+    return result
 
 
 def _process_read_only(user_id: str, session: dict, t: str, tl: str) -> ChatOut:

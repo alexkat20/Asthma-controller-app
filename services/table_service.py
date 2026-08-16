@@ -1,13 +1,8 @@
 """
 Табличное представление истории пикфлоуметрии за последние N дней — прямо в
-чате. Есть два формата вывода:
-
-  - build_table_data() — структурированные данные (JSON) для интерактивной
-    HTML-таблицы на фронтенде: сортировка по клику на заголовок, фильтр по
-    препаратам. Это основной, интерактивный вариант.
-  - build_table_image() — та же самая таблица картинкой (matplotlib -> PNG),
-    оставлена как есть — пригодится, если понадобится что-то печатать/
-    прикладывать к отчёту, где интерактивность не нужна.
+чате. build_table_data() отдаёт структурированные данные (JSON) для
+интерактивной HTML-таблицы на фронтенде: сортировка по клику на заголовок,
+фильтр по препаратам.
 
 Одна строка таблицы = одна запись показаний (не один день!): если в день было
 две записи (утренняя и вечерняя — см. logging_service.py), это две отдельные
@@ -17,27 +12,15 @@
 
 from datetime import datetime, timedelta
 
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import pandas as pd
 
 from repositories import database as db
 from repositories import profile_repository as profile_repo
 from utils.formatting import FLAG_RU
-from utils.plotting import fig_to_data_uri
 
 MIN_DAYS = 1
 MAX_DAYS = 31
 DEFAULT_DAYS = 7
-
-_ZONE_CELL_COLORS = {
-    "green": "#EAF7EC",
-    "yellow": "#FCF2DF",
-    "red": "#FBEAEA",
-    "unknown": "#FFFFFF",
-}
 
 
 def _classify(maximum, green_zone, yellow_zone) -> str:

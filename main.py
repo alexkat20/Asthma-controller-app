@@ -9,8 +9,14 @@ Peak Flow — веб-чат-бот (без Telegram).
     utils/        — общие мелочи без побочных эффектов (даты, форматирование, графики)
     static/       — фронтенд (чат-интерфейс: HTML/CSS/JS, без фреймворков)
 
-Запуск: uvicorn main:app --reload --port 8000
+Запуск веб-приложения: uvicorn main:app --reload --port 8000
 Открыть: http://localhost:8000
+
+Фоновый планировщик (напоминания, ежемесячный ACT) запускается ОТДЕЛЬНО:
+    python scheduler_worker.py
+Он больше не часть этого процесса намеренно: если веб-приложение развёрнуто
+с несколькими воркерами/инстансами (uvicorn --workers N, несколько подов и
+т.п.), планировщик внутри каждого из них дублировал бы напоминания N раз.
 """
 
 from pathlib import Path
@@ -22,7 +28,6 @@ import uvicorn
 
 from endpoints import chat, notifications, report, upload, export
 from repositories.database import init_db
-from services.reminder_service import start_scheduler
 
 SERVER_HOST = "localhost"
 SERVER_PORT = 8000
@@ -39,12 +44,6 @@ app.include_router(upload.router)
 app.include_router(notifications.router)
 app.include_router(report.router)
 app.include_router(export.router)
-
-
-@app.on_event("startup")
-def _start_scheduler() -> None:
-    start_scheduler()
-
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")

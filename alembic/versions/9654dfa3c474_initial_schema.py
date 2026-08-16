@@ -99,8 +99,8 @@ def upgrade() -> None:
         sa.Column("stress", sa.Boolean(), nullable=False),
         sa.Column("allergy", sa.Boolean(), nullable=False),
         sa.Column("flight", sa.Boolean(), nullable=False),
-        sa.Column("attacks_count", sa.Integer(), nullable=False),
-        sa.Column("record_time", sa.String(), nullable=False),
+        sa.Column("attacks_count", sa.Integer(), nullable=True),
+        sa.Column("record_time", sa.String(), nullable=True),
         sa.ForeignKeyConstraint(
             ["user_id"],
             ["users.user_id"],

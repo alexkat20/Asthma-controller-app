@@ -5,9 +5,9 @@ from datetime import datetime
 import matplotlib
 
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
+from matplotlib.figure import Figure
 
 from repositories import database as db
 from services import forecast_service
@@ -80,13 +80,17 @@ def run_analysis(user_id: str, days, custom_range) -> tuple:
     images = []
     top_factors = ""
     if not corr_matrix.empty:
-        plt.figure(figsize=(5, max(2.5, 0.32 * len(corr_matrix))))
+        # Figure()/add_subplot() — объектный API matplotlib, НЕ plt.figure().
+        # См. подробное объяснение в utils/plotting.py::fig_to_data_uri — под
+        # параллельной нагрузкой глобальное состояние plt приводило к 500-м.
+        fig = Figure(figsize=(5, max(2.5, 0.32 * len(corr_matrix))))
+        ax = fig.add_subplot(111)
         sns.heatmap(
-            corr_matrix, annot=True, cmap="coolwarm", center=0, fmt=".2f", cbar=False
+            corr_matrix, annot=True, cmap="coolwarm", center=0, fmt=".2f", cbar=False, ax=ax
         )
-        plt.title("Корреляция с максимумом пикфлоу")
-        plt.tight_layout()
-        images.append(fig_to_data_uri())
+        ax.set_title("Корреляция с максимумом пикфлоу")
+        fig.tight_layout()
+        images.append(fig_to_data_uri(fig))
         top = corr_matrix["maximum"].abs().sort_values(ascending=False).head(3)
         top_factors = "\nСильнее всего связаны с максимумом: " + ", ".join(top.index)
 
@@ -111,35 +115,36 @@ def run_plot(user_id: str, days, custom_range) -> tuple:
 
     df["date"] = pd.to_datetime(df["date"]).dt.date
 
-    plt.figure(figsize=(8, 4))
+    fig = Figure(figsize=(8, 4))
+    ax = fig.add_subplot(111)
     if thresholds:
         top = max(df["maximum"].max(), thresholds.green_zone) * 1.05
-        plt.axhspan(thresholds.green_zone, top, color="#2F9E44", alpha=0.08)
-        plt.axhspan(
+        ax.axhspan(thresholds.green_zone, top, color="#2F9E44", alpha=0.08)
+        ax.axhspan(
             thresholds.yellow_zone, thresholds.green_zone, color="#E8A33D", alpha=0.12
         )
-        plt.axhspan(0, thresholds.yellow_zone, color="#D14343", alpha=0.08)
-    plt.plot(df["date"], df["maximum"], marker="o", color="#3E6FB0", label="показания")
+        ax.axhspan(0, thresholds.yellow_zone, color="#D14343", alpha=0.08)
+    ax.plot(df["date"], df["maximum"], marker="o", color="#3E6FB0", label="показания")
     if len(df) >= 5:
         df["trend"] = df["maximum"].rolling(5, min_periods=1).mean()
-        plt.plot(
+        ax.plot(
             df["date"],
             df["trend"],
             linestyle="--",
             color="#444",
             label="тренд (скольз. среднее)",
         )
-    plt.title(f"Динамика пикфлоу — {label}")
-    plt.xlabel("Дата")
-    plt.ylabel("Пикфлоу")
-    plt.grid(alpha=0.3)
-    plt.xticks(rotation=40)
-    plt.legend()
-    print(df)
+    ax.set_title(f"Динамика пикфлоу — {label}")
+    ax.set_xlabel("Дата")
+    ax.set_ylabel("Пикфлоу")
+    ax.grid(alpha=0.3)
+    ax.tick_params(axis="x", labelrotation=40)
+    ax.legend()
     if not (custom_range is None and days == ALL_TIME):
-        plt.xlim(pd.to_datetime(start_str), pd.to_datetime(end_str))
+        ax.set_xlim(pd.to_datetime(start_str), pd.to_datetime(end_str))
 
-    image = fig_to_data_uri()
+    fig.tight_layout()
+    image = fig_to_data_uri(fig)
 
     return f"📈 График за {label}.", [image]
 
@@ -172,7 +177,8 @@ def run_predict(user_id: str) -> tuple:
             f"Тренд последних недель: {direction} ~{abs(slope):.1f} л/мин в день."
         )
 
-    plt.figure(figsize=(7, 3.3))
+    fig = Figure(figsize=(7, 3.3))
+    ax = fig.add_subplot(111)
     dates = [d["date"] for d in week]
     values = [d["predicted_value"] for d in week]
     colors = {
@@ -181,13 +187,14 @@ def run_predict(user_id: str) -> tuple:
         "red": "#D14343",
         "unknown": "#999",
     }
-    plt.plot(dates, values, color="#3E6FB0", zorder=1)
-    plt.scatter(dates, values, c=[colors[d["zone"]] for d in week], zorder=2, s=60)
-    plt.title("Прогноз на ближайшую неделю")
-    plt.ylabel("Пикфлоу")
-    plt.grid(alpha=0.3)
-    plt.xticks(rotation=30)
-    image = fig_to_data_uri()
+    ax.plot(dates, values, color="#3E6FB0", zorder=1)
+    ax.scatter(dates, values, c=[colors[d["zone"]] for d in week], zorder=2, s=60)
+    ax.set_title("Прогноз на ближайшую неделю")
+    ax.set_ylabel("Пикфлоу")
+    ax.grid(alpha=0.3)
+    ax.tick_params(axis="x", labelrotation=30)
+    fig.tight_layout()
+    image = fig_to_data_uri(fig)
 
     lines.append(
         "\n📅 На неделю вперёд (без учёта будущих факторов, кроме сегодняшнего):"

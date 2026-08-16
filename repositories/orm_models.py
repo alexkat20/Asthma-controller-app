@@ -157,3 +157,63 @@ class TreatmentPlan(Base):
     worsening_therapy: Mapped[str | None] = mapped_column(String, nullable=True)
     attack_therapy: Mapped[str | None] = mapped_column(String, nullable=True)
     updated_at: Mapped[str | None] = mapped_column(String, nullable=True)
+
+
+class ChatSession(Base):
+    """
+    Состояние текущего шага диалога (какой шаг мастера записи/анкеты/ACT/плана
+    активен, накопленные промежуточные данные) — раньше жило в обычном Python
+    dict в памяти процесса (SESSIONS в chat_service.py). Это работало, только
+    пока веб-приложение — один процесс: с несколькими воркерами/инстансами
+    каждый из них видел только свою половину диалога (подтверждено на практике —
+    один и тот же пользователь получал два независимых, рассинхронизированных
+    "мозга"). Теперь состояние в БД — неважно, какой воркер обработал запрос.
+
+    data — весь session-dict целиком, сериализованный в JSON. Схема этого
+    словаря нестабильна и часто меняется (новые шаги мастеров и т.д.), поэтому
+    отдельные колонки под каждый возможный ключ были бы обузой — здесь ровно
+    та же экономия, что и в оригинальном in-memory решении: гибкая структура,
+    которая нужна только на время одного диалога, а не постоянная схема данных.
+    """
+
+    __tablename__ = "chat_sessions"
+
+    user_id: Mapped[str] = mapped_column(String, primary_key=True)
+    data: Mapped[str] = mapped_column(String)  # JSON
+    updated_at: Mapped[str] = mapped_column(String)
+
+
+class Notification(Base):
+    """
+    Очередь уведомлений (напоминания, ежедневный дайджест, просрочен ACT) —
+    раньше жила в dict {user_id: [текст, ...]} в памяти процесса
+    (_NOTIFICATIONS в notification_service.py), с той же проблемой
+    множественных воркеров: push из одного процесса не виден poll-у из
+    другого. Одна строка — одно уведомление; pop_all вычитывает и сразу
+    удаляет все уведомления пользователя.
+    """
+
+    __tablename__ = "notifications"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String)
+    message: Mapped[str] = mapped_column(String)
+    created_at: Mapped[str] = mapped_column(String)
+
+
+class SchedulerLock(Base):
+    """
+    Блокировка для фонового планировщика (см. scheduler_worker.py — теперь
+    отдельный процесс, не поток внутри веб-воркера). Единственная строка
+    (id=1) с арендой (lease): holder — идентификатор процесса, который сейчас
+    "владеет" правом выполнять проверки; expires_at — когда аренда истекает.
+    Если процесс с планировщиком упал, не освободив лок явно, аренда истечёт
+    сама, и следующий тик другого экземпляра (например, при пересечении во
+    время деплоя) сможет его перехватить — без ручного вмешательства.
+    """
+
+    __tablename__ = "scheduler_lock"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    holder: Mapped[str | None] = mapped_column(String, nullable=True)
+    expires_at: Mapped[str | None] = mapped_column(String, nullable=True)
