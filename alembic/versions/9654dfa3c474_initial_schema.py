@@ -151,6 +151,25 @@ def upgrade() -> None:
         sa.Column("updated_at", sa.String(), nullable=True),
         sa.PrimaryKeyConstraint("user_id"),
     )
+    op.create_table('chat_sessions',
+                    sa.Column('user_id', sa.String(), nullable=False),
+                    sa.Column('data', sa.String(), nullable=False),
+                    sa.Column('updated_at', sa.String(), nullable=False),
+                    sa.PrimaryKeyConstraint('user_id')
+                    )
+    op.create_table('notifications',
+                    sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
+                    sa.Column('user_id', sa.String(), nullable=False),
+                    sa.Column('message', sa.String(), nullable=False),
+                    sa.Column('created_at', sa.String(), nullable=False),
+                    sa.PrimaryKeyConstraint('id')
+                    )
+    op.create_table('scheduler_lock',
+                    sa.Column('id', sa.Integer(), nullable=False),
+                    sa.Column('holder', sa.String(), nullable=True),
+                    sa.Column('expires_at', sa.String(), nullable=True),
+                    sa.PrimaryKeyConstraint('id')
+                    )
     # ### end Alembic commands ###
 
 
@@ -169,4 +188,7 @@ def downgrade() -> None:
     op.drop_table("act_results")
     op.drop_table("act_notify_state")
     op.drop_table("treatment_plan")
+    op.drop_table('scheduler_lock')
+    op.drop_table('notifications')
+    op.drop_table('chat_sessions')
     # ### end Alembic commands ###
