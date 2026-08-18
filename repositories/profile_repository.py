@@ -1,5 +1,3 @@
-"""Репозиторий анкеты пользователя (user_profile)."""
-
 from datetime import datetime
 
 from sqlalchemy import select
@@ -63,7 +61,6 @@ def save_profile(user_id: str, data: dict) -> None:
             existing.weight_kg = data.get("weight_kg")
             existing.smoking = data.get("smoking")
             existing.allergies = allergies_str
-            # created_at умышленно не трогаем — это точка отсчёта для ACT, не должна сдвигаться
         else:
             conn.add(
                 UserProfile(

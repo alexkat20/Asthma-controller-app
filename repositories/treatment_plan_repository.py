@@ -1,5 +1,3 @@
-"""Репозиторий плана лечения от врача (Asthma Action Plan), привязанного к зонам."""
-
 from sqlalchemy.orm import Session
 
 from repositories.orm_models import TreatmentPlan

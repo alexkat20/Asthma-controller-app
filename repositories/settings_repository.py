@@ -1,5 +1,3 @@
-"""Репозиторий вспомогательных настроек: местоположение пользователя и напоминания."""
-
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 

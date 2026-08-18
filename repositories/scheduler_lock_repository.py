@@ -1,15 +1,3 @@
-"""
-Блокировка планировщика (см. orm_models.SchedulerLock, scheduler_worker.py).
-
-Захват — атомарный UPDATE с условием в WHERE и проверкой количества
-затронутых строк, а не "прочитать -> проверить в Python -> записать" (у
-последнего есть окно гонки: два процесса могут одновременно прочитать
-"лок свободен" и оба посчитать, что взяли его). UPDATE ... WHERE выполняется
-атомарно на уровне самой СУБД — так одинаково корректно работает и на
-SQLite, и на PostgreSQL, без pg_advisory_lock или другых специфичных для
-диалекта механизмов (важно, раз SQLite остаётся для быстрых прогонов тестов).
-"""
-
 from datetime import datetime, timedelta
 
 from sqlalchemy import or_, update
@@ -27,14 +15,10 @@ def _ensure_lock_row(conn: Session) -> None:
         try:
             conn.commit()
         except Exception:
-            # Кто-то другой создал строку параллельно между get() и commit() —
-            # не страшно, дальше просто работаем с уже существующей строкой.
             conn.rollback()
 
 
 def try_acquire(conn: Session, holder_id: str, lease_seconds: int = 90) -> bool:
-    """Пытается захватить (или продлить свою же) аренду лока. Возвращает True,
-    если лок теперь у holder_id."""
     _ensure_lock_row(conn)
 
     now_str = datetime.now().strftime(DATE_FORMAT)
@@ -58,8 +42,6 @@ def try_acquire(conn: Session, holder_id: str, lease_seconds: int = 90) -> bool:
 
 
 def release(conn: Session, holder_id: str) -> None:
-    """Явно освобождает лок (например, при штатной остановке процесса).
-    Не обязателен — аренда истечёт сама, но так следующий держатель не ждёт."""
     conn.execute(
         update(SchedulerLock)
         .where(SchedulerLock.id == LOCK_ROW_ID, SchedulerLock.holder == holder_id)

@@ -1,5 +1,3 @@
-"""Pydantic-схемы для HTTP-слоя (запросы/ответы эндпоинтов)."""
-
 from pydantic import BaseModel
 
 

@@ -1,17 +1,3 @@
-"""
-Верхнеуровневый маршрутизатор сообщений чата.
-
-Держит состояние диалога (в памяти процесса — session per user_id) и решает,
-какому сервису передать управление: онбординг профиля, аналитика, умная запись
-показаний, лекарства, напоминания, местоположение/аллергия, ACT, отчёт,
-семейный доступ.
-
-Семейный доступ (read-only): если входящий user_id — это выданный кем-то токен
-просмотра (см. services/family_service.py), сообщение обслуживается в режиме
-"только чтение" — все операции читают данные владельца, но запись данных
-заблокирована на уровне роутинга (см. _process_read_only).
-"""
-
 import re
 from datetime import datetime
 
@@ -73,12 +59,7 @@ def _export_download_url(user_id: str, days, custom_range) -> str:
 
 
 def get_session(user_id: str) -> dict:
-    """Загружает состояние диалога из БД (см. repositories/session_repository.py).
-    Раньше это был просто SESSIONS.setdefault(user_id, {...}) — обычный Python
-    dict в памяти процесса. Работало только при одном веб-воркере: с несколькими
-    воркерами/инстансами каждый видел свою половину диалога независимо от
-    остальных (подтверждено на практике — см. историю изменений). Теперь
-    состояние в БД, поэтому неважно, какой процесс обработал запрос."""
+    """Загружает состояние диалога из БД"""
     conn = db.get_connection()
     try:
         stored = session_repository.load_session(conn, user_id)
@@ -113,11 +94,6 @@ def _table_days_prompt() -> ChatOut:
 
 
 def process_message(user_id: str, text: str) -> ChatOut:
-    """user_id — то, что прислал фронтенд: либо реальный ID пользователя,
-    либо (если это выданный кем-то токен просмотра) идентификатор сессии
-    "гостя". Сессия (UI-состояние вроде выбранного периода) всегда хранится
-    по исходному user_id — так просмотр не пересекается с активной сессией
-    владельца данных, даже если он в этот момент сам что-то делает в чате."""
     session = get_session(user_id)
     t = text.strip()
     tl = t.lower()
@@ -203,8 +179,6 @@ def _process_read_only(user_id: str, session: dict, t: str, tl: str) -> ChatOut:
             quick_replies=READ_ONLY_MENU,
         )
 
-    # Даже попытку пройти тест заново сводим к просмотру последнего результата —
-    # прохождение теста меняет данные, а доступ здесь только на чтение.
     if "тест" in tl or "act" in tl:
         return ChatOut(
             reply=act_service.show_act_status(user_id), quick_replies=READ_ONLY_MENU
@@ -226,7 +200,6 @@ def _process_read_only(user_id: str, session: dict, t: str, tl: str) -> ChatOut:
 
 
 def _process_full(user_id: str, session: dict, t: str, tl: str) -> ChatOut:
-    # Профиль — обязателен один раз, до чего-либо ещё.
     if session.get("onboarding_step"):
         return profile_service.continue_onboarding(user_id, session, t)
 
@@ -281,20 +254,18 @@ def _process_full(user_id: str, session: dict, t: str, tl: str) -> ChatOut:
             )
         return ChatOut(reply=reply, images=images, quick_replies=MAIN_MENU)
 
-    # Мастер записи показаний (шаги: показания -> препарат -> доза -> приступы -> состояние)
     log_step = session.get("log_step")
     if log_step == "reading":
         return logging_service.handle_reading_input(user_id, session, t)
     if log_step == "medicine":
-        return logging_service.handle_medicine_step(user_id, session, t)
+        return logging_service.handle_medicine_step(session, t)
     if log_step == "dose_count":
-        return logging_service.handle_dose_count_step(user_id, session, t)
+        return logging_service.handle_dose_count_step(session, t)
     if log_step == "attacks":
-        return logging_service.handle_attacks_step(user_id, session, t)
+        return logging_service.handle_attacks_step(session, t)
     if log_step == "state":
         return logging_service.handle_state_step(user_id, session, t)
 
-    # Мастер плана лечения (3 шага подряд)
     if session.get("plan_step") is not None:
         return treatment_plan_service.continue_plan_edit(user_id, session, t)
 
@@ -307,7 +278,6 @@ def _process_full(user_id: str, session: dict, t: str, tl: str) -> ChatOut:
             quick_replies=["✏️ Изменить план"] + MAIN_MENU,
         )
 
-    # Тест контроля астмы (5 вопросов подряд)
     if session.get("act_step") is not None:
         return act_service.continue_act(user_id, session, t)
 
@@ -419,7 +389,6 @@ def _process_full(user_id: str, session: dict, t: str, tl: str) -> ChatOut:
             reply="Введите название и дозу через точку с запятой, например: «Симбикорт; 2 дозы»."
         )
 
-    # иначе, если сообщение похоже на показания (три и более числа) — начинаем запись
     if logging_service.looks_like_reading(t):
         return logging_service.handle_reading_input(user_id, session, t)
 

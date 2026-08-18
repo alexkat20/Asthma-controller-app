@@ -1,16 +1,3 @@
-"""
-План лечения от врача — цифровой аналог Asthma Action Plan, который врач
-обычно выдаёт на бумаге: что принимать в обычном режиме (соответствует
-зелёной зоне), что делать при ухудшении (жёлтая зона) и что делать при
-приступе (красная зона / когда зафиксированы приступы за день).
-
-Заполняется один раз командой «план лечения», потом можно обновить в любой
-момент. Пока план не задан хотя бы частично — бот просто не показывает эту
-секцию, ничего не выдумывая от себя (в отличие от recommend_service.py,
-который строит статистическую догадку по истории, план лечения — это то,
-что реально сказал врач, и приоритетнее статистики).
-"""
-
 from datetime import datetime
 
 from models.schemas import ChatOut
@@ -78,8 +65,6 @@ def show_plan(user_id: str) -> str:
 
 
 def get_guidance_for_zone(user_id: str, zone: str) -> str | None:
-    """zone: 'yellow' -> worsening_therapy, 'red' -> attack_therapy. Для 'green' и
-    неизвестных зон возвращает None — там показывать нечего."""
     field = {"yellow": "worsening_therapy", "red": "attack_therapy"}.get(zone)
     if field is None:
         return None
@@ -92,8 +77,6 @@ def get_guidance_for_zone(user_id: str, zone: str) -> str | None:
 
 
 def get_attack_guidance(user_id: str) -> str | None:
-    """Отдельно от зоны — план на случай приступа показываем всегда, если
-    сегодня были приступы, даже если сам показатель пикфлоу в зелёной зоне."""
     conn = db.get_connection()
     plan = plan_repo.get_plan(conn, user_id)
     conn.close()

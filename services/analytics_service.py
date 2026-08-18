@@ -1,10 +1,10 @@
-"""Анализ за период, график динамики и прогноз (текст + графики в base64 для чата)."""
-
 from datetime import datetime
 
 import matplotlib
 
 matplotlib.use("Agg")
+
+
 import pandas as pd
 import seaborn as sns
 from matplotlib.figure import Figure

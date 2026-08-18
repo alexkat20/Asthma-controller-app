@@ -1,15 +1,3 @@
-"""
-Табличное представление истории пикфлоуметрии за последние N дней — прямо в
-чате. build_table_data() отдаёт структурированные данные (JSON) для
-интерактивной HTML-таблицы на фронтенде: сортировка по клику на заголовок,
-фильтр по препаратам.
-
-Одна строка таблицы = одна запись показаний (не один день!): если в день было
-две записи (утренняя и вечерняя — см. logging_service.py), это две отдельные
-строки со своим временем. Утренние записи не имеют препарата/состояния —
-это не баг, а то самое разделение "утром только показания".
-"""
-
 from datetime import datetime, timedelta
 
 import pandas as pd
@@ -49,8 +37,6 @@ def _profile_caption(profile: dict | None) -> str:
 
 
 def _collect(user_id: str, days: int):
-    """Общая выборка+склейка данных, переиспользуется и картинкой, и интерактивной таблицей.
-    Возвращает (readings_df, meds_by_date, extra_by_date, profile, label) либо None, если пусто."""
     days = max(MIN_DAYS, min(MAX_DAYS, days))
     end = datetime.now()
     start = end - timedelta(days=days)
@@ -71,9 +57,6 @@ def _collect(user_id: str, days: int):
 
     readings = readings.sort_values("date")
 
-    # Препараты и состояние привязываются к записи по точному совпадению даты —
-    # ровно то же самое, что и медикамент/extra_info внутри одной вечерней записи
-    # (см. logging_service.py::_finalize — они всегда пишутся с одинаковым date_str).
     meds_by_date = {}
     if not meds.empty:
         for date_val, group in meds.groupby("date"):
@@ -87,9 +70,6 @@ def _collect(user_id: str, days: int):
 
 
 def build_table_data(user_id: str, days: int):
-    """Возвращает (текст_подписи, table_dict|None) — table_dict уходит в
-    ChatOut.table и рисуется на фронтенде настоящей HTML-таблицей с
-    сортировкой по клику на заголовок и фильтром по препаратам."""
     collected = _collect(user_id, days)
     if collected is None:
         return f"Нет данных за последние {_period_label(days)}.", None
@@ -122,7 +102,7 @@ def build_table_data(user_id: str, days: int):
                 else int(extra_row.attacks_count)
             )
         else:
-            state_display = "—"  # утренняя запись — состояние не спрашивалось
+            state_display = "—"
             attacks = None
 
         rows.append(

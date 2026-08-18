@@ -1,30 +1,3 @@
-"""
-Репозиторий основной БД Peak Flow: пользователи, препараты, показания, зоны, импорт файлов.
-
-Это единственный слой, который знает SQL (через SQLAlchemy ORM) и структуру
-таблиц users / medicine / taken_medicine / extra_info / readings. Сервисы
-обращаются сюда, а не пишут SQL сами.
-
-Бэкенд БД — SQLite (по умолчанию) или PostgreSQL, переключается переменной
-окружения DB_BACKEND (см. repositories/db_engine.py) без изменений в коде.
-
-Ключевые особенности (важно сохранить при дальнейших изменениях):
-1. Зоны (зелёная/жёлтая/красная) считаются НЕ по последним 20 записям подряд,
-   а как "personal best" (лучший результат) в скользящем окне по ДАТЕ
-   (по умолчанию 90 дней) — это ближе к принятой методике пикфлоуметрии
-   и не даёт одному плохому дню резко "обрушить" границы зон.
-2. Импорт файлов не пытается вставить несуществующую в таблице readings
-   колонку "Extra info" — это было причиной падения при загрузке xlsx/csv
-   в самой первой версии бота.
-3. Препараты, встреченные в файле, но отсутствующие в таблице medicine,
-   создаются автоматически, а не приводят к KeyError.
-4. Даты хранятся строками "%Y-%m-%d %H:%M:%S" (не DateTime) — формат
-   лексикографически сортируется, поэтому сравнения "date >= ? AND date <= ?"
-   работают одинаково на SQLite и PostgreSQL без каких-либо специфичных для
-   диалекта SQL-функций (раньше здесь был SQLite-специфичный datetime('now', ?),
-   который на Postgres просто не сработал бы).
-"""
-
 from datetime import datetime, timedelta
 
 import pandas as pd
@@ -42,16 +15,8 @@ GREEN_RATIO = 0.8
 YELLOW_RATIO = 0.5
 
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
-
-# В исходном формате файла (First try/Second try/.../Date) времени никогда нет —
-# колонка Date строго "MM/DD/YYYY". Раньше таким записям молча ставилась полночь
-# (00:00), из-за чего на графике они "прятались" в самое начало дня. Ставим 23:00 —
-# ближе к вечерней записи (когда обычно и подводят итог дня), и при отрисовке
-# графика с точным временем на оси X эти точки не будут визуально сливаться с
-# записями, сделанными в начале дня.
 DEFAULT_IMPORT_TIME = "23:00:00"
 
-# Известные флаги состояния + допустимые алиасы из старого формата файлов
 EXTRA_INFO_FLAGS = ["sport", "sickness", "stress", "allergy", "flight"]
 EXTRA_INFO_ALIASES = {
     "sick": "sickness",
@@ -71,17 +36,10 @@ EXTRA_INFO_ALIASES = {
 
 
 def get_connection() -> Session:
-    """Возвращает новую сессию SQLAlchemy. Имя и контракт (commit()/close())
-    сохранены от старого sqlite3.Connection специально, чтобы не переписывать
-    полтора десятка мест в services/*, которые вызывают db.get_connection()."""
     return SessionLocal()
 
 
 def init_db() -> None:
-    """Создаёт все таблицы, если их ещё нет. Для продакшена предпочтителен
-    `alembic upgrade head` (см. alembic/ и README) — init_db() остаётся как
-    удобство для быстрого локального старта и не мешает Alembic: обе схемы
-    идентичны (первая миграция сгенерирована с этой же ORM-схемы)."""
     Base.metadata.create_all(bind=engine)
 
 
@@ -130,7 +88,7 @@ def list_medicine_names(conn: Session) -> list:
 
 
 def list_medicines_with_doses(conn: Session) -> list:
-    """Возвращает [(medicine_name, dose), ...] — для кнопок выбора препарата в диалоге."""
+    """Возвращает [(medicine_name, dose), ...] """
     rows = conn.execute(
         select(Medicine.medicine_name, Medicine.dose).order_by(Medicine.medicine_name)
     ).all()
@@ -176,11 +134,6 @@ def calculate_zone_thresholds(
     as_of_date,
     window_days: int = DEFAULT_ZONE_WINDOW_DAYS,
 ) -> ZoneThresholds:
-    """
-    Personal best = максимум Maximum за window_days дней ДО и ВКЛЮЧАЯ as_of_date.
-    Если истории ещё нет (первая запись) — personal best = самой этой записи,
-    то есть первая запись всегда попадёт в зелёную зону.
-    """
     if isinstance(as_of_date, str):
         as_of_date = datetime.fromisoformat(as_of_date.split(" ")[0].replace("/", "-"))
 
@@ -225,7 +178,7 @@ def insert_reading(
     second_try: float,
     third_try: float,
 ) -> tuple:
-    """Вставляет новую запись и сразу считает для неё зоны. Возвращает (id, thresholds, zone_name)."""
+    """Вставляет новую запись и сразу считает для неё зоны"""
     maximum = max(first_try, second_try, third_try)
     date_str = _to_date_str(date)
 
@@ -268,7 +221,7 @@ def insert_reading(
 def recalculate_zones_for_user_history(
     conn: Session, user_id: str, window_days: int = DEFAULT_ZONE_WINDOW_DAYS
 ) -> int:
-    """Пересчитывает green_zone/yellow_zone для ВСЕЙ истории пользователя (после импорта)."""
+    """Пересчитывает green_zone/yellow_zone для ВСЕЙ истории пользователя"""
     rows = conn.execute(
         select(Reading.id, Reading.date, Reading.maximum)
         .where(Reading.user_id == user_id)
@@ -311,7 +264,6 @@ def recalculate_zones_for_user_history(
 
 
 def _parse_extra_info_cell(cell: str) -> dict:
-    """'Sport, Stress' / 'sick' / 'Аллергия' -> {'sport': True, 'stress': True, ...}"""
     flags = {f: False for f in EXTRA_INFO_FLAGS}
     if not cell or (isinstance(cell, float) and pd.isna(cell)):
         return flags
@@ -324,11 +276,6 @@ def _parse_extra_info_cell(cell: str) -> dict:
 
 
 def import_dataframe(conn: Session, df: pd.DataFrame, user_id: str) -> dict:
-    """
-    Импортирует датафрейм в ожидаемом формате: First try, Second try, Third try,
-    Maximum, Date, <названия препаратов...>, Green/Yellow/Red Zone (игнорируются —
-    пересчитываются), Extra info. Возвращает статистику импорта.
-    """
     df = df.copy()
     df.columns = [str(c).strip() for c in df.columns]
 
@@ -417,16 +364,9 @@ def import_dataframe(conn: Session, df: pd.DataFrame, user_id: str) -> dict:
     }
 
 
-# ---------------------------------------------------------------------------
-# Выборки для аналитики/графиков/прогноза/рекомендаций/экспорта.
-# Репозиторий отдаёт "сырые" DataFrame — вся агрегация/визуализация в сервисах.
-# ---------------------------------------------------------------------------
 def fetch_full_readings_df(
     conn: Session, user_id: str, start_str: str, end_str: str
 ) -> pd.DataFrame:
-    """Полная выборка показаний (все колонки) за период — для экспорта в CSV
-    (services/export_service.py), в отличие от fetch_readings_df, которая
-    отдаёт только date+maximum для графиков/аналитики."""
     stmt = (
         select(
             Reading.date,
@@ -500,9 +440,6 @@ def fetch_flags_df(
 def fetch_extra_info_full_df(
     conn: Session, user_id: str, start_str: str, end_str: str
 ) -> pd.DataFrame:
-    """Полная выборка extra_info (включая attacks_count/record_time) — для
-    табличного отображения в чате (services/table_service.py). В отличие от
-    fetch_flags_df, которая отдаёт только флаги состояния для прогноза/анализа."""
     stmt = select(
         ExtraInfo.date,
         ExtraInfo.sport,

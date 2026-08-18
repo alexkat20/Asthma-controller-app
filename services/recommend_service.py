@@ -1,13 +1,3 @@
-"""
-Подбор препарата при ухудшении состояния (жёлтая/красная зона) на основе
-исторических данных: какой препарат чаще всего ассоциировался с возвратом
-в зелёную зону НА СЛЕДУЮЩИЙ день после "плохого" дня.
-
-Это корреляция, а не causal-вывод (мы не рандомизировали приём препаратов),
-поэтому рекомендация всегда идёт с пометкой уверенности и числом наблюдений,
-а не как категоричный совет.
-"""
-
 import pandas as pd
 
 from models.domain import ZoneThresholds
@@ -29,19 +19,12 @@ def _classify_row(row) -> str:
 
 
 def recommend_medicine(conn, user_id: str, min_occurrences: int = 3) -> dict | None:
-    """
-    Возвращает None, если данных недостаточно вообще, либо словарь:
-      {"medicine": str, "confidence": "high"|"medium"|"low",
-       "recovery_rate": float|None, "used": int, "baseline_recovery_rate": float|None,
-       "note": str}
-    """
     readings = dbmod.fetch_all_readings_with_zones_df(conn, user_id)
     if readings.empty:
         return None
 
     readings["date"] = pd.to_datetime(readings["date"])
     readings["day"] = readings["date"].dt.normalize()
-    # если за день несколько замеров — берём худший (минимальный максимум) как самочувствие дня
     daily = readings.sort_values("maximum").groupby("day", as_index=False).first()
     daily["zone"] = daily.apply(_classify_row, axis=1)
 
@@ -86,8 +69,6 @@ def recommend_medicine(conn, user_id: str, min_occurrences: int = 3) -> dict | N
     ]
 
     if not candidates:
-        # Недостаточно повторов ни для одного препарата — честно предупреждаем и
-        # показываем хотя бы самый частый вариант в "плохие" дни как ориентир.
         med_counts = meds.loc[
             meds["day"].isin(bad_days["day"]), "medicine_name"
         ].value_counts()
@@ -100,7 +81,8 @@ def recommend_medicine(conn, user_id: str, min_occurrences: int = 3) -> dict | N
             "recovery_rate": None,
             "used": int(med_counts.max()),
             "baseline_recovery_rate": baseline_recovery,
-            "note": f"недостаточно повторов для статистики восстановления — показан просто самый часто используемый в такие дни препарат ({RU_MEDICINE_NOTE})",
+            "note": f"недостаточно повторов для статистики восстановления — показан просто самый часто используемый"
+                    f" в такие дни препарат ({RU_MEDICINE_NOTE})",
         }
 
     candidates.sort(key=lambda c: (c["recovery_rate"], c["used"]), reverse=True)

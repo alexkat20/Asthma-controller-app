@@ -1,11 +1,9 @@
-"""Разбор периодов ('неделя', '2 недели', произвольный диапазон дат) для анализа/графиков/экспорта."""
-
 import re
 from datetime import datetime, timedelta
 
 ALL_TIME = (
     -1
-)  # сентинел для «всё время»: отдельно от None, который означает «период не распознан»
+)
 
 PERIOD_DAYS = {
     "неделя": 7,
@@ -35,13 +33,10 @@ CUSTOM_RANGE_RE = re.compile(
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 EARLIEST_POSSIBLE_DATE = datetime(
     1970, 1, 1
-)  # для периода "всё время" — нижняя граница без верхнего предела
+)
 
 
 def parse_period(text: str):
-    """Возвращает (days, None) для именованного периода (days=ALL_TIME означает
-    'всё время') или (None, (start, end)) для произвольного диапазона дат.
-    (None, None) — период не распознан."""
     t = text.strip().lower()
     if t in PERIOD_DAYS:
         return PERIOD_DAYS[t], None
@@ -57,16 +52,6 @@ def parse_period(text: str):
 
 
 def build_date_filter(days, custom_range):
-    """
-    Возвращает (start_str, end_str, человекочитаемая_метка_периода) — обе
-    границы уже посчитаны в Python и отформатированы как обычные строки
-    "%Y-%m-%d %H:%M:%S". Раньше здесь собиралась SQLite-специфичная
-    SQL-строка с функцией datetime('now', ?), которая работала только на
-    SQLite — на PostgreSQL синтаксис вычисления интервалов другой. Вычисляя
-    границы в Python и сравнивая обычные строки (формат лексикографически
-    сортируется), код работает одинаково на обоих бэкендах без каких-либо
-    SQL-функций, специфичных для диалекта.
-    """
     if custom_range:
         start, end = custom_range
         return (

@@ -1,10 +1,3 @@
-"""
-Местоположение пользователя (для сводки по пыльце) и проверка аллергии "сейчас".
-
-Оркестрирует repositories.settings_repository (хранение) и services.allergy_service
-(геокодинг города + получение данных о пыльце через внешний Open-Meteo API).
-"""
-
 from repositories import settings_repository as settings_repo
 from repositories.database import get_connection
 from repositories.profile_repository import get_profile

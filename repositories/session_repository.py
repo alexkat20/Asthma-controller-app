@@ -1,5 +1,3 @@
-"""Репозиторий состояния диалога (см. orm_models.ChatSession)."""
-
 import json
 
 from sqlalchemy.orm import Session

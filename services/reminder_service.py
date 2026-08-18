@@ -1,17 +1,3 @@
-"""
-Напоминания: команда «напоминание HH:MM» + проверка (check_reminders), кому
-пора отправить утренний дайджест (прогноз + пыльца).
-
-Сама периодичность («раз в минуту, для всех пользователей») теперь не здесь —
-это делает отдельный процесс scheduler_worker.py, вызывающий check_reminders()
-и act_service.check_and_notify_due_users() по таймеру. Раньше это был
-threading.Thread внутри веб-процесса — с несколькими воркерами/инстансами
-получили бы N параллельных планировщиков и N уведомлений вместо одного.
-
-Без Telegram push уведомление кладётся в очередь (notification_service), а
-забирает её фронтенд поллингом.
-"""
-
 import re
 from datetime import datetime
 
@@ -60,9 +46,6 @@ def _send_daily_digest(conn, user_id: str) -> None:
 
 
 def check_reminders() -> None:
-    """Вызывается из scheduler_worker.py по таймеру (раньше был приватным
-    _check_reminders, вызывавшимся только из потока внутри этого же модуля —
-    теперь легитимно вызывается извне, поэтому без ведущего подчёркивания)."""
     conn = get_connection()
     now = datetime.now()
     today_str = now.strftime("%Y-%m-%d")

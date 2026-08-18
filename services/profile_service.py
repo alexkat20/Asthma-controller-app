@@ -1,11 +1,3 @@
-"""
-Анкета профиля пользователя — обязательна один раз, до любого другого действия.
-
-Шаги (пол → возраст → рост → вес → курение → город → аллергии) ведутся через
-session-словарь чата (см. services/chat_service.py), а сами данные сохраняются
-в repositories/profile_repository.py.
-"""
-
 import re
 
 from models.schemas import ChatOut
@@ -118,7 +110,6 @@ def continue_onboarding(user_id: str, session: dict, text: str) -> ChatOut:
         prompt, options = ONBOARDING_PROMPTS[next_step]
         return ChatOut(reply=prompt, quick_replies=options)
 
-    # Анкета заполнена — сохраняем.
     session["onboarding_step"] = None
     profile_repo.save_profile(user_id, data)
 

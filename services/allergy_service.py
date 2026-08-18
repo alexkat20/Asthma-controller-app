@@ -1,14 +1,3 @@
-"""
-Данные о пыльце/аллергенах через Open-Meteo Air Quality API.
-
-- Бесплатно, без API-ключа, для некоммерческого использования.
-- Пыльца доступна только для Европы (данные модели CAMS Europe).
-- Документация: https://open-meteo.com/en/docs/air-quality-api
-
-Геокодирование города в координаты — через отдельный Geocoding API Open-Meteo
-(тот же провайдер, тоже без ключа).
-"""
-
 import requests
 
 GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
@@ -34,7 +23,6 @@ POLLEN_RU = {
 
 
 def parse_allergen_selection(text: str) -> list:
-    """'берёза, амброзия' -> ['birch_pollen', 'ragweed_pollen']. Пустой список, если ничего не найдено."""
     lower = text.lower()
     found = []
     for key, label in POLLEN_RU.items():
@@ -47,7 +35,6 @@ REQUEST_TIMEOUT = 8
 
 
 def geocode_city(name: str):
-    """Возвращает {'lat':.., 'lon':.., 'label': 'Город, Регион, Страна'} или None."""
     try:
         r = requests.get(
             GEOCODING_URL,
@@ -70,10 +57,6 @@ def geocode_city(name: str):
 
 
 def get_today_pollen(lat: float, lon: float):
-    """
-    Возвращает {переменная: пиковое_значение_за_сегодня, ...} или None, если
-    сервис недоступен / регион не покрыт (пыльца считается только для Европы).
-    """
     try:
         r = requests.get(
             AIR_QUALITY_URL,
@@ -118,9 +101,7 @@ def summarize_pollen(pollen_data: dict, user_allergens: list | None = None) -> s
     """Короткая сводка по пыльце для утреннего уведомления/команды 'аллергия'.
 
     Если известны собственные аллергии пользователя (user_allergens — ключи из
-    POLLEN_VARS), для них показываем уровень всегда, даже умеренный — это то,
-    что человеку важнее всего. Остальные растения упоминаем, только если риск
-    высокий или очень высокий.
+    POLLEN_VARS), для них показываем уровень всегда, даже умеренный
     """
     if not pollen_data or not any(var in pollen_data for var in POLLEN_VARS):
         return "Нет данных о пыльце для вашего региона (сервис пока покрывает в основном Европу)."
