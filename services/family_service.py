@@ -28,6 +28,13 @@ def resolve_viewer(user_id: str):
     return user_id, False
 
 
+def list_shares(owner_user_id: str) -> list:
+    conn = get_connection()
+    shares = family_repo.list_shares(conn, owner_user_id)
+    conn.close()
+    return shares
+
+
 def list_shares_text(owner_user_id: str) -> str:
     conn = get_connection()
     shares = family_repo.list_shares(conn, owner_user_id)

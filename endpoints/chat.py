@@ -8,4 +8,4 @@ router = APIRouter()
 
 @router.post("/api/chat", response_model=ChatOut)
 def chat(payload: ChatIn) -> ChatOut:
-    return process_message(payload.user_id, payload.text)
+    return process_message(payload.user_id, payload.text, payload.command)

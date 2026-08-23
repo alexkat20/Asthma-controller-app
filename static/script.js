@@ -192,12 +192,17 @@ function hideTyping() {
 
 function setQuickReplies(list) {
   quickRepliesEl.innerHTML = "";
-  (list || []).forEach((label) => {
+  (list || []).forEach((item) => {
+    // Бэкенд теперь всегда присылает {label, command} (см. models/schemas.py::
+    // QuickReply) — команды верхнего уровня несут явный command, ответы внутри
+    // мастеров (ACT, дозы, состояние...) — просто label с command=null.
+    const label = typeof item === "string" ? item : item.label;
+    const command = typeof item === "string" ? null : item.command;
     const chip = document.createElement("button");
     chip.className = "chip";
     chip.type = "button";
     chip.textContent = label;
-    chip.addEventListener("click", () => sendMessage(label));
+    chip.addEventListener("click", () => sendMessage(label, command));
     quickRepliesEl.appendChild(chip);
   });
 }
@@ -231,7 +236,7 @@ sliderConfirmBtn.addEventListener("click", () => {
   sendMessage(value);
 });
 
-async function sendMessage(text) {
+async function sendMessage(text, command = null) {
   const trimmed = (text ?? textInput.value).trim();
   if (!trimmed) return;
 
@@ -245,7 +250,7 @@ async function sendMessage(text) {
     const res = await fetch(`${API_BASE}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ user_id: USER_ID, text: trimmed }),
+      body: JSON.stringify({ user_id: USER_ID, text: trimmed, command }),
     });
     const data = await res.json();
     hideTyping();

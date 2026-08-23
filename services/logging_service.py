@@ -100,12 +100,10 @@ def handle_reading_input(user_id: str, session: dict, text: str) -> ChatOut:
     return ChatOut(reply="Какой препарат приняли?", quick_replies=quick_replies)
 
 
-def handle_medicine_step(session: dict, text: str) -> ChatOut:
+def handle_medicine_step(user_id: str, session: dict, text: str) -> ChatOut:
     options = session.get("medicine_options", {})
     key = text.strip()
-    medicine_name = (
-        options[key] if key in options else key
-    )
+    medicine_name = options[key] if key in options else key
     session.pop("medicine_options", None)
 
     if medicine_name is None:  # выбрали "Без препарата"
@@ -119,7 +117,7 @@ def handle_medicine_step(session: dict, text: str) -> ChatOut:
     )
 
 
-def handle_dose_count_step(session: dict, text: str) -> ChatOut:
+def handle_dose_count_step(user_id: str, session: dict, text: str) -> ChatOut:
     m = re.search(r"\d+", text)
     if not m:
         return ChatOut(
@@ -130,7 +128,7 @@ def handle_dose_count_step(session: dict, text: str) -> ChatOut:
     return _prompt_attacks_step(session)
 
 
-def handle_attacks_step(session: dict, text: str) -> ChatOut:
+def handle_attacks_step(user_id: str, session: dict, text: str) -> ChatOut:
     m = re.search(r"\d+", text)
     if not m:
         return ChatOut(
@@ -212,9 +210,7 @@ def _finalize(user_id: str, data: dict, now: datetime) -> ChatOut:
 
         if attacks_count and attacks_count > 0:
             attack_plan = treatment_plan_service.get_attack_guidance(user_id)
-            if (
-                attack_plan and zone != "red"
-            ):
+            if attack_plan and zone != "red":
                 reply += f"\n\n📋 План врача на случай приступа: {attack_plan}"
 
         if zone in ("yellow", "red") and not plan_guidance:
