@@ -167,7 +167,8 @@ def _process_full(
     if session.get("awaiting_medicine_name"):
         session["awaiting_medicine_name"] = False
         return ChatOut(
-            reply=medicine_service.add_medicine_from_text(t), quick_replies=MAIN_MENU
+            reply=medicine_service.add_medicine_from_text(user_id, t),
+            quick_replies=MAIN_MENU,
         )
 
     if session.get("awaiting_city"):

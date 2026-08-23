@@ -57,40 +57,64 @@ def ensure_user(
     conn.commit()
 
 
-def get_or_create_medicine_id(conn: Session, medicine_name: str, dose: str = "") -> int:
-    existing = conn.execute(
-        select(Medicine).where(Medicine.medicine_name.ilike(medicine_name))
-    ).scalar_one_or_none()
+def _find_user_medicine(conn: Session, user_id: str, medicine_name: str):
+    """Ищет препарат пользователя без учёта регистра.
+
+    Сравнение делаем в Python: SQLite-овский lower()/ILIKE не сворачивает
+    регистр кириллицы («Симбикорт» != «симбикорт»), а Python str.lower()
+    работает для Unicode одинаково на обоих бэкендах."""
+    target = medicine_name.strip().lower()
+    rows = conn.execute(select(Medicine).where(Medicine.user_id == user_id)).scalars()
+    for med in rows:
+        if med.medicine_name.strip().lower() == target:
+            return med
+    return None
+
+
+def get_or_create_medicine_id(
+    conn: Session, user_id: str, medicine_name: str, dose: str = ""
+) -> int:
+    existing = _find_user_medicine(conn, user_id, medicine_name)
     if existing:
         return existing.medicine_id
 
-    medicine = Medicine(medicine_name=medicine_name, dose=dose)
+    medicine = Medicine(user_id=user_id, medicine_name=medicine_name, dose=dose)
     conn.add(medicine)
     conn.commit()
     conn.refresh(medicine)
     return medicine.medicine_id
 
 
-def upsert_medicine(conn: Session, medicine_name: str, dose: str = "") -> None:
-    """Добавляет препарат или обновляет дозу существующего (medicine_name уникален)."""
-    existing = conn.execute(
-        select(Medicine).where(Medicine.medicine_name == medicine_name)
-    ).scalar_one_or_none()
+def add_medicine(
+    conn: Session, user_id: str, medicine_name: str, dose: str = ""
+) -> str:
+    existing = _find_user_medicine(conn, user_id, medicine_name)
     if existing:
-        existing.dose = dose
-    else:
-        conn.add(Medicine(medicine_name=medicine_name, dose=dose))
+        if dose and dose != (existing.dose or ""):
+            existing.dose = dose
+            conn.commit()
+            return "dose_updated"
+        return "exists"
+
+    conn.add(Medicine(user_id=user_id, medicine_name=medicine_name, dose=dose))
     conn.commit()
+    return "created"
 
 
-def list_medicine_names(conn: Session) -> list:
-    return list(conn.execute(select(Medicine.medicine_name)).scalars().all())
+def list_medicine_names(conn: Session, user_id: str) -> list:
+    return list(
+        conn.execute(select(Medicine.medicine_name).where(Medicine.user_id == user_id))
+        .scalars()
+        .all()
+    )
 
 
-def list_medicines_with_doses(conn: Session) -> list:
-    """Возвращает [(medicine_name, dose), ...] """
+def list_medicines_with_doses(conn: Session, user_id: str) -> list:
+    """Возвращает [(medicine_name, dose), ...] только для этого пользователя."""
     rows = conn.execute(
-        select(Medicine.medicine_name, Medicine.dose).order_by(Medicine.medicine_name)
+        select(Medicine.medicine_name, Medicine.dose)
+        .where(Medicine.user_id == user_id)
+        .order_by(Medicine.medicine_name)
     ).all()
     return [(r.medicine_name, r.dose) for r in rows]
 
@@ -302,7 +326,7 @@ def import_dataframe(conn: Session, df: pd.DataFrame, user_id: str) -> dict:
     medicine_cols = [c for c in df.columns if c not in known_non_medicine_cols]
 
     for med_name in medicine_cols:
-        get_or_create_medicine_id(conn, med_name)
+        get_or_create_medicine_id(conn, user_id, med_name)
 
     readings_inserted = 0
     doses_inserted = 0
@@ -341,7 +365,7 @@ def import_dataframe(conn: Session, df: pd.DataFrame, user_id: str) -> dict:
             doses = row.get(med_name)
             if pd.isna(doses) or doses == 0:
                 continue
-            medicine_id = get_or_create_medicine_id(conn, med_name)
+            medicine_id = get_or_create_medicine_id(conn, user_id, med_name)
             add_taken_medicine(conn, medicine_id, user_id, int(doses), date_str)
             doses_inserted += 1
 

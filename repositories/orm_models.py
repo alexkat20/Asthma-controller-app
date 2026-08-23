@@ -16,11 +16,14 @@ class User(Base):
 
 class Medicine(Base):
     __tablename__ = "medicine"
-    __table_args__ = (UniqueConstraint("medicine_name", name="uq_medicine_name"),)
+    __table_args__ = (
+        UniqueConstraint("user_id", "medicine_name", name="uq_medicine_user_name"),
+    )
 
     medicine_id: Mapped[int] = mapped_column(
         Integer, primary_key=True, autoincrement=True
     )
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.user_id"))
     medicine_name: Mapped[str] = mapped_column(String)
     dose: Mapped[str | None] = mapped_column(String, nullable=True)
 

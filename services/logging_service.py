@@ -78,7 +78,7 @@ def handle_reading_input(user_id: str, session: dict, text: str) -> ChatOut:
     session["log_data"] = {"values": values, "flags": flags}
 
     conn = db.get_connection()
-    medicines = db.list_medicines_with_doses(conn)
+    medicines = db.list_medicines_with_doses(conn, user_id)
     conn.close()
 
     if not medicines:
@@ -171,7 +171,7 @@ def _finalize(user_id: str, data: dict, now: datetime) -> ChatOut:
     medicine_name = data.get("medicine_name")
     doses = data.get("doses")
     if medicine_name and doses:
-        medicine_id = db.get_or_create_medicine_id(conn, medicine_name)
+        medicine_id = db.get_or_create_medicine_id(conn, user_id, medicine_name)
         db.add_taken_medicine(conn, medicine_id, user_id, doses, date_str)
 
     flags = data.get("flags") or {}
