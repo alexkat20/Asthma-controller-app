@@ -161,6 +161,7 @@ def _process_full(
         cmd_id = command.split(":", 1)[0]
         handler = _FULL_COMMANDS.get(cmd_id)
         if handler:
+            _reset_wizards(session)
             return handler(user_id, session, command)
 
     if session.get("awaiting_medicine_name"):
@@ -481,12 +482,12 @@ def _process_read_only(
         session["awaiting_table_days"] = False
         return ChatOut(reply=read_only_welcome(), quick_replies=READ_ONLY_MENU)
 
-    # Явная команда с кнопки — приоритетнее "лёгких" текстовых ожиданий ниже
-    # (см. подробное объяснение в _process_full).
     if command:
         cmd_id = command.split(":", 1)[0]
         handler = _READ_ONLY_COMMANDS.get(cmd_id)
         if handler:
+            session["awaiting_period"] = None
+            session["awaiting_table_days"] = False
             return handler(user_id, session, command)
 
     if session.get("awaiting_period"):
