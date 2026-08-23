@@ -75,7 +75,28 @@ function renderInteractiveTable(tableData) {
   const wrapper = document.createElement("div");
   wrapper.className = "data-table-wrapper";
 
-  const state = { sortKey: null, sortDir: 1, activeFilters: new Set() };
+  const state = { sortKey: null, sortDir: 1, activeFilters: new Set(), activePeriodFilters: new Set() };
+
+  if (tableData.period_options && tableData.period_options.length > 0) {
+    const periodFilterRow = document.createElement("div");
+    periodFilterRow.className = "table-filter-row";
+    tableData.period_options.forEach((label) => {
+      const chipLabel = document.createElement("label");
+      chipLabel.className = "table-filter-chip";
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.addEventListener("change", () => {
+        if (checkbox.checked) state.activePeriodFilters.add(label);
+        else state.activePeriodFilters.delete(label);
+        chipLabel.classList.toggle("active", checkbox.checked);
+        renderBody();
+      });
+      chipLabel.appendChild(checkbox);
+      chipLabel.appendChild(document.createTextNode(" " + label));
+      periodFilterRow.appendChild(chipLabel);
+    });
+    wrapper.appendChild(periodFilterRow);
+  }
 
   if (tableData.medicine_options && tableData.medicine_options.length > 0) {
     const filterRow = document.createElement("div");
@@ -125,6 +146,9 @@ function renderInteractiveTable(tableData) {
 
     if (state.activeFilters.size > 0) {
       rows = rows.filter((row) => (row.medicines || []).some((m) => state.activeFilters.has(m)));
+    }
+    if (state.activePeriodFilters.size > 0) {
+      rows = rows.filter((row) => state.activePeriodFilters.has(row.period_label));
     }
 
     if (state.sortKey) {

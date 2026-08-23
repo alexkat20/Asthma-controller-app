@@ -4,11 +4,8 @@ from datetime import datetime
 from models.schemas import ChatOut
 from repositories import database as db
 from services import nlp_service, recommend_service, treatment_plan_service
+from utils.dates import MORNING_CUTOFF_HOUR
 from utils.formatting import FLAG_RU, MAIN_MENU, ZONE_RU
-
-MORNING_CUTOFF_HOUR = (
-    12  # до этого часа — утренняя (только показания), после — вечерняя запись
-)
 
 NO_MEDICINE_LABEL = "Без препарата"
 NO_STATE_LABEL = "Ничего из этого"

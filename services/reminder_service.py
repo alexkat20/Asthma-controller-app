@@ -25,12 +25,12 @@ def handle_reminder_command(user_id: str, text: str) -> str:
 
 
 def _send_daily_digest(conn, user_id: str) -> None:
-    today = forecast_service.forecast_today(conn, user_id)
+    today = forecast_service.forecast_today(conn, user_id, period="morning")
     if today is None:
         msg = "📢 Не забудьте записать сегодняшние показания пикфлоуметра!"
     else:
         msg = (
-            f"📢 Доброе утро! Ожидаемый пикфлоу сегодня: ~{today['predicted_value']:.0f} "
+            f"📢 Доброе утро! Ожидаемый утренний пикфлоу сегодня: ~{today['predicted_value']:.0f} "
             f"({ZONE_RU[today['zone']]}). Сделайте замер и сравните с прогнозом."
         )
 

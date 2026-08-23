@@ -4,6 +4,7 @@ import pandas as pd
 
 from repositories import database as db
 from repositories import profile_repository as profile_repo
+from utils.dates import PERIOD_RU, classify_period
 from utils.formatting import FLAG_RU
 
 MIN_DAYS = 1
@@ -79,6 +80,7 @@ def build_table_data(user_id: str, days: int):
     medicine_options = set()
     for r in readings.itertuples():
         dt = pd.to_datetime(r.date)
+        period = classify_period(dt)
         zone = _classify(r.maximum, r.green_zone, r.yellow_zone)
 
         med_entries = meds_by_date.get(r.date, [])
@@ -109,6 +111,8 @@ def build_table_data(user_id: str, days: int):
             {
                 "date_time": dt.strftime("%d.%m %H:%M"),
                 "date_raw": r.date,
+                "period": period,
+                "period_label": PERIOD_RU[period].capitalize(),
                 "attempts": f"{r.first_try:.0f}/{r.second_try:.0f}/{r.third_try:.0f}",
                 "max": r.maximum,
                 "zone": zone,
@@ -122,6 +126,7 @@ def build_table_data(user_id: str, days: int):
     table = {
         "columns": [
             {"key": "date_time", "label": "Дата/время", "sortKey": "date_raw"},
+            {"key": "period_label", "label": "Период"},
             {"key": "attempts", "label": "Попытки"},
             {"key": "max", "label": "Макс."},
             {"key": "medicines_display", "label": "Препараты"},
@@ -130,6 +135,10 @@ def build_table_data(user_id: str, days: int):
         ],
         "rows": rows,
         "medicine_options": sorted(medicine_options),
+        "period_options": [
+            PERIOD_RU["morning"].capitalize(),
+            PERIOD_RU["evening"].capitalize(),
+        ],
     }
 
     caption = f"🗓 Таблица за последние {label} ({len(rows)} записей)."

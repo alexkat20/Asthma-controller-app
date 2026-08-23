@@ -1,9 +1,25 @@
 import re
 from datetime import datetime, timedelta
 
-ALL_TIME = (
-    -1
-)
+ALL_TIME = -1
+
+# Единый источник истины для "утро"/"вечер" — используется и при записи
+# показаний (logging_service.py: до этого часа — только показания, без
+# препаратов/приступов/состояния), и при отображении (analytics_service.py,
+# forecast_service.py, table_service.py), чтобы деление было одинаковым везде.
+MORNING_CUTOFF_HOUR = 12
+PERIOD_RU = {"morning": "утро", "evening": "вечер"}
+
+
+def classify_period(date_value) -> str:
+    """'morning', если час записи меньше MORNING_CUTOFF_HOUR, иначе 'evening'.
+    Принимает и datetime/pd.Timestamp (есть атрибут .hour), и строку в
+    формате БД "%Y-%m-%d %H:%M:%S" (час — по фиксированной позиции 11:13)."""
+    hour = (
+        date_value.hour if hasattr(date_value, "hour") else int(str(date_value)[11:13])
+    )
+    return "morning" if hour < MORNING_CUTOFF_HOUR else "evening"
+
 
 PERIOD_DAYS = {
     "неделя": 7,
@@ -31,9 +47,7 @@ CUSTOM_RANGE_RE = re.compile(
 )
 
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
-EARLIEST_POSSIBLE_DATE = datetime(
-    1970, 1, 1
-)
+EARLIEST_POSSIBLE_DATE = datetime(1970, 1, 1)
 
 
 def parse_period(text: str):

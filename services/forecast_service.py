@@ -4,15 +4,28 @@ import numpy as np
 import pandas as pd
 
 from repositories import database as dbmod
+from utils.dates import classify_period
 
 FLAG_COLUMNS = ["sport", "sickness", "stress", "allergy", "flight"]
 
 
-def _load_history(conn, user_id: str, lookback_days: int = 365) -> pd.DataFrame:
+def _load_history(
+    conn, user_id: str, period: str | None = None, lookback_days: int = 365
+) -> pd.DataFrame:
+    """period=None — вся история (как раньше, смешивая утро/вечер).
+    period="morning"/"evening" — только записи этого времени суток, чтобы
+    прогноз на утро строился по утренней истории, а на вечер — по вечерней
+    (утренние показания в среднем всегда ниже вечерних — это нормальная
+    суточная динамика лёгких, а не ухудшение; смешивать их в одну базовую
+    линию означало бы искажать оба прогноза)."""
     since_str = (datetime.now() - timedelta(days=lookback_days)).strftime(
         dbmod.DATE_FORMAT
     )
     df = dbmod.fetch_history_since_df(conn, user_id, since_str)
+    if df.empty:
+        return df
+    if period is not None:
+        df = df[df["date"].map(classify_period) == period].reset_index(drop=True)
     if not df.empty:
         df["date"] = pd.to_datetime(df["date"])
     return df
@@ -90,8 +103,8 @@ def _predict_value(
     return baseline + trend_component + weekday_component + flags_component
 
 
-def _build_context(conn, user_id):
-    df = _load_history(conn, user_id)
+def _build_context(conn, user_id, period: str | None = None):
+    df = _load_history(conn, user_id, period=period)
     if df.empty:
         return None
     flags_df = _load_flags(conn, user_id)
@@ -106,8 +119,8 @@ def _build_context(conn, user_id):
     }
 
 
-def forecast_today(conn, user_id: str) -> dict | None:
-    ctx = _build_context(conn, user_id)
+def forecast_today(conn, user_id: str, period: str | None = None) -> dict | None:
+    ctx = _build_context(conn, user_id, period=period)
     if ctx is None:
         return None
 
@@ -139,8 +152,8 @@ def forecast_today(conn, user_id: str) -> dict | None:
     }
 
 
-def forecast_week(conn, user_id: str) -> list:
-    ctx = _build_context(conn, user_id)
+def forecast_week(conn, user_id: str, period: str | None = None) -> list:
+    ctx = _build_context(conn, user_id, period=period)
     if ctx is None:
         return []
 
@@ -172,3 +185,19 @@ def forecast_week(conn, user_id: str) -> list:
             }
         )
     return results
+
+
+def forecast_today_by_period(conn, user_id: str) -> dict:
+    """{"morning": прогноз_или_None, "evening": прогноз_или_None} — раздельно,
+    каждый строится по истории только своего времени суток."""
+    return {
+        "morning": forecast_today(conn, user_id, period="morning"),
+        "evening": forecast_today(conn, user_id, period="evening"),
+    }
+
+
+def forecast_week_by_period(conn, user_id: str) -> dict:
+    return {
+        "morning": forecast_week(conn, user_id, period="morning"),
+        "evening": forecast_week(conn, user_id, period="evening"),
+    }
