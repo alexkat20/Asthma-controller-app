@@ -4,7 +4,6 @@ import matplotlib
 
 matplotlib.use("Agg")
 
-
 import pandas as pd
 import seaborn as sns
 from matplotlib.figure import Figure
@@ -16,6 +15,7 @@ from utils.formatting import FLAG_RU, ZONE_RU
 from utils.plotting import fig_to_data_uri
 
 _PERIOD_COLOR = {"morning": "#F2A93B", "evening": "#3E6FB0"}
+_PERIOD_TREND_COLOR = {"morning": "#B26A00", "evening": "#1C3F73"}
 _PERIOD_LABEL = {"morning": "утро", "evening": "вечер"}
 _ZONE_COLOR = {
     "green": "#2F9E44",
@@ -206,6 +206,17 @@ def run_plot(user_id: str, days, custom_range) -> tuple:
             color=_PERIOD_COLOR[period],
             label=_PERIOD_LABEL[period],
         )
+        if len(sub) >= 5:
+            trend = sub["maximum"].rolling(5, min_periods=1).mean()
+            ax.plot(
+                sub["date"],
+                trend,
+                linestyle="--",
+                color=_PERIOD_TREND_COLOR[period],
+                linewidth=2.0,
+                zorder=5,
+                label=f"{_PERIOD_LABEL[period]} — тренд",
+            )
 
     ax.set_title(f"Динамика пикфлоу — {label}")
     ax.set_xlabel("Дата")
