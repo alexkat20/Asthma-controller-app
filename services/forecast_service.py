@@ -60,7 +60,12 @@ def _trend_slope(df: pd.DataFrame, window_days: int = 21) -> float:
         return 0.0
     x = (recent["date"] - recent["date"].min()).dt.days.values.astype(float)
     y = recent["maximum"].values.astype(float)
-    slope, _ = np.polyfit(x, y, 1)
+    if np.unique(x).size < 2:
+        return 0.0
+    try:
+        slope, _ = np.polyfit(x, y, 1)
+    except np.linalg.LinAlgError:
+        return 0.0
     return float(slope)
 
 
