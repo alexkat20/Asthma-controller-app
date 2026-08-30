@@ -6,6 +6,7 @@ from repositories.unit_of_work import UnitOfWork
 from services import (
     act_service,
     analytics_service,
+    backfill_service,
     family_service,
     location_service,
     logging_service,
@@ -88,6 +89,7 @@ def _reset_wizards(session: dict) -> None:
     session.pop("medicine_options", None)
     session.pop("act_answers", None)
     session.pop("plan_data", None)
+    session.pop("backfill_data", None)
 
 
 def _table_days_prompt() -> ChatOut:
@@ -147,6 +149,12 @@ def _process_full(
         return logging_service.handle_triggers_step(user_id, session, t)
     if log_step == "symptoms":
         return logging_service.handle_symptoms_step(user_id, session, t)
+    if log_step == "backfill_date":
+        return backfill_service.handle_date_step(user_id, session, t)
+    if log_step == "backfill_period":
+        return backfill_service.handle_period_step(user_id, session, t)
+    if log_step == "backfill_values":
+        return backfill_service.handle_values_step(user_id, session, t)
 
     if session.get("plan_step") is not None:
         return treatment_plan_service.continue_plan_edit(user_id, session, t)
@@ -240,6 +248,10 @@ def _create_family_share(user_id: str, label: str) -> ChatOut:
 
 def _cmd_log_reading(user_id: str, session: dict, command: str) -> ChatOut:
     return logging_service.prompt_reading_entry(session)
+
+
+def _cmd_backfill_reading(user_id: str, session: dict, command: str) -> ChatOut:
+    return backfill_service.prompt_date(session)
 
 
 def _cmd_analysis(user_id: str, session: dict, command: str) -> ChatOut:
@@ -370,6 +382,7 @@ def _cmd_profile_edit(user_id: str, session: dict, command: str) -> ChatOut:
 
 _FULL_COMMANDS = {
     "log_reading": _cmd_log_reading,
+    "backfill_reading": _cmd_backfill_reading,
     "analysis": _cmd_analysis,
     "plot": _cmd_plot,
     "table": _cmd_table,

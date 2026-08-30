@@ -15,6 +15,7 @@ from repositories.extra_info_repository import EXTRA_INFO_FLAGS, ExtraInfoReposi
 from repositories.medicine_repository import MedicineRepository
 from repositories.orm_models import Reading
 from repositories.user_repository import UserRepository
+from utils.dates import classify_period
 
 # Персональный рекорд считается по данным за этот период (в днях)
 DEFAULT_ZONE_WINDOW_DAYS = 90
@@ -190,6 +191,107 @@ class ReadingRepository(BaseRepository):
 
         zone = classify_zone(maximum, thresholds)
         return reading.id, thresholds, zone
+
+    def find_reading(self, user_id: str, day, period: str) -> dict | None:
+        """Показание пользователя за конкретный день+период (утро/вечер) —
+        для добавления/исправления пропущенного значения задним числом
+        (services/backfill_service.py). Если таких несколько (в норме не
+        должно быть — обычно один замер на период в день), берётся самое
+        позднее по времени."""
+        day_start = f"{day.isoformat()} 00:00:00"
+        day_end = f"{day.isoformat()} 23:59:59"
+        rows = (
+            self.db.execute(
+                select(Reading)
+                .where(
+                    Reading.user_id == user_id,
+                    Reading.date >= day_start,
+                    Reading.date <= day_end,
+                )
+                .order_by(Reading.date.desc())
+            )
+            .scalars()
+            .all()
+        )
+        for row in rows:
+            if classify_period(row.date) == period:
+                return {
+                    "id": row.id,
+                    "first_try": row.first_try,
+                    "second_try": row.second_try,
+                    "third_try": row.third_try,
+                    "maximum": row.maximum,
+                }
+        return None
+
+    def upsert_reading_for_period(
+        self,
+        user_id: str,
+        day,
+        period: str,
+        first_try: float,
+        second_try: float,
+        third_try: float,
+    ) -> dict:
+        """Добавляет пропущенное показание или исправляет уже существующее за
+        этот день+период. В отличие от insert_reading (используется при живой
+        записи «сейчас», где новая запись всегда позже всех предыдущих),
+        здесь дата может быть любой в прошлом — вставка/правка задним числом
+        может изменить персональный рекорд для промежуточных дней, поэтому
+        зоны пересчитываются по ВСЕЙ истории (как при импорте CSV), а не
+        только вперёд по времени от одной записи."""
+        existing = self.find_reading(user_id, day, period)
+        maximum = max(first_try, second_try, third_try)
+
+        if existing:
+            row = self.db.get(Reading, existing["id"])
+            row.first_try, row.second_try, row.third_try = (
+                first_try,
+                second_try,
+                third_try,
+            )
+            row.maximum = maximum
+            updated = True
+        else:
+            default_hour = 9 if period == "morning" else 20
+            date_str = f"{day.isoformat()} {default_hour:02d}:00:00"
+            row = Reading(
+                user_id=user_id,
+                date=date_str,
+                first_try=first_try,
+                second_try=second_try,
+                third_try=third_try,
+                maximum=maximum,
+                green_zone=None,
+                yellow_zone=None,
+                red_zone=None,
+            )
+            self.db.add(row)
+            updated = False
+
+        self.db.flush()
+        self._recalculate_zones_for_user_history(user_id)
+        self.db.flush()
+        self.db.refresh(row)
+
+        thresholds = None
+        if row.green_zone is not None:
+            thresholds = ZoneThresholds(
+                personal_best=maximum,
+                green_zone=row.green_zone,
+                yellow_zone=row.yellow_zone,
+            )
+        zone = classify_zone(maximum, thresholds)
+
+        return {
+            "updated": updated,
+            "reading_id": row.id,
+            "date": row.date,
+            "maximum": maximum,
+            "zone": zone,
+            "green_zone": row.green_zone,
+            "yellow_zone": row.yellow_zone,
+        }
 
     def import_dataframe(self, df: pd.DataFrame, user_id: str) -> dict:
         df = df.copy()

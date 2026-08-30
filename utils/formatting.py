@@ -31,6 +31,7 @@ SMOKING_RU = {"no": "не курит", "yes": "курит", "quit": "броси�
 
 MAIN_MENU = [
     QuickReply(label="📝 Записать показания", command="log_reading"),
+    QuickReply(label="🕓 Пропущенное показание", command="backfill_reading"),
     QuickReply(label="📊 Анализ", command="analysis"),
     QuickReply(label="📈 График", command="plot"),
     QuickReply(label="🗓 Таблица", command="table"),

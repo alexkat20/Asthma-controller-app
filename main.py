@@ -8,7 +8,7 @@ import uvicorn
 from endpoints import chat, notifications, report, upload, export
 from repositories.db_engine import init_db
 
-SERVER_HOST = "localhost"
+SERVER_HOST = "0.0.0.0"
 SERVER_PORT = 8000
 
 app = FastAPI(title="Peak Flow Chat Bot")
