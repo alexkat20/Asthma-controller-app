@@ -40,3 +40,9 @@ class Base(DeclarativeBase):
 
 def get_session():
     return SessionLocal()
+
+
+def init_db() -> None:
+    from repositories import orm_models  # noqa: F401
+
+    Base.metadata.create_all(bind=engine)

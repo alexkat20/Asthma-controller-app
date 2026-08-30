@@ -6,7 +6,7 @@ from fastapi.staticfiles import StaticFiles
 import uvicorn
 
 from endpoints import chat, notifications, report, upload, export
-from repositories.database import init_db
+from repositories.db_engine import init_db
 
 SERVER_HOST = "localhost"
 SERVER_PORT = 8000

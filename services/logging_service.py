@@ -2,7 +2,7 @@ import re
 from datetime import datetime
 
 from models.schemas import ChatOut
-from repositories import database as db
+from repositories import medicine_repository, reading_repository
 from services import nlp_service, recommend_service, treatment_plan_service
 from utils.dates import MORNING_CUTOFF_HOUR
 from utils.formatting import FLAG_RU, MAIN_MENU, ZONE_RU
@@ -77,9 +77,7 @@ def handle_reading_input(user_id: str, session: dict, text: str) -> ChatOut:
     flags = nlp_service.detect_state(text)
     session["log_data"] = {"values": values, "flags": flags}
 
-    conn = db.get_connection()
-    medicines = db.list_medicines_with_doses(conn, user_id)
-    conn.close()
+    medicines = medicine_repository.list_medicines_with_doses(user_id)
 
     if not medicines:
         return _prompt_attacks_step(session)
@@ -163,23 +161,22 @@ def _finalize(user_id: str, data: dict, now: datetime) -> ChatOut:
     date_str = now.strftime("%Y-%m-%d %H:%M:%S")
     record_time = now.strftime("%H:%M")
 
-    conn = db.get_connection()
-    db.ensure_user(conn, user_id)
-    _, thresholds, zone = db.insert_reading(conn, user_id, now, *values)
-    maximum = max(values)
-
     medicine_name = data.get("medicine_name")
     doses = data.get("doses")
-    if medicine_name and doses:
-        medicine_id = db.get_or_create_medicine_id(conn, user_id, medicine_name)
-        db.add_taken_medicine(conn, medicine_id, user_id, doses, date_str)
-
     flags = data.get("flags") or {}
     attacks_count = data.get("attacks_count")
-    if attacks_count is not None or any(flags.values()):
-        db.add_extra_info(conn, user_id, date_str, flags, attacks_count, record_time)
-    conn.commit()
-    conn.close()
+
+    thresholds, zone = reading_repository.save_reading_entry(
+        user_id,
+        now,
+        *values,
+        medicine_name=medicine_name,
+        doses=doses,
+        flags=flags,
+        attacks_count=attacks_count,
+        record_time=record_time,
+    )
+    maximum = max(values)
 
     zone_messages = {
         "green": f"✅ Пикфлоу {maximum:.0f} — {ZONE_RU['green']} зона (≥{thresholds.green_zone:.0f}). Стабильно.",
@@ -211,9 +208,7 @@ def _finalize(user_id: str, data: dict, now: datetime) -> ChatOut:
                 reply += f"\n\n📋 План врача на случай приступа: {attack_plan}"
 
         if zone in ("yellow", "red") and not plan_guidance:
-            conn2 = db.get_connection()
-            rec = recommend_service.recommend_medicine(conn2, user_id)
-            conn2.close()
+            rec = recommend_service.recommend_medicine(user_id)
             if rec:
                 reply += "\n\n" + recommend_service.format_recommendation(rec)
 

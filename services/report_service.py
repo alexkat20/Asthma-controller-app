@@ -3,7 +3,7 @@ from datetime import datetime
 import pandas as pd
 
 from repositories import act_repository as act_repo
-from repositories import database as db
+from repositories import medicine_repository, reading_repository
 from repositories import profile_repository as profile_repo
 from services import analytics_service
 from utils.dates import build_date_filter
@@ -53,9 +53,7 @@ def _profile_block(user_id: str) -> str:
 
 
 def _zone_block(user_id: str) -> str:
-    conn = db.get_connection()
-    thresholds = db.calculate_zone_thresholds(conn, user_id, datetime.now())
-    conn.close()
+    thresholds = reading_repository.calculate_zone_thresholds(user_id, datetime.now())
     if thresholds is None:
         return "<p>Недостаточно данных для расчёта зон.</p>"
     return (
@@ -70,9 +68,7 @@ def _zone_block(user_id: str) -> str:
 
 def _medicine_usage_block(user_id: str, days: int) -> str:
     start_str, end_str, _ = build_date_filter(days, None)
-    conn = db.get_connection()
-    meds = db.fetch_medicine_doses_df(conn, user_id, start_str, end_str)
-    conn.close()
+    meds = medicine_repository.fetch_medicine_doses_df(user_id, start_str, end_str)
     if meds.empty:
         return "<p>Нет данных о приёме препаратов за период.</p>"
     totals = (
@@ -88,9 +84,7 @@ def _medicine_usage_block(user_id: str, days: int) -> str:
 
 
 def _act_block(user_id: str) -> str:
-    conn = db.get_connection()
-    history = act_repo.get_act_history(conn, user_id, limit=12)
-    conn.close()
+    history = act_repo.get_act_history(user_id, limit=12)
     if not history:
         return "<p>Тест контроля астмы (ACT) ещё не проходился.</p>"
     rows = "".join(

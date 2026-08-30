@@ -3,7 +3,7 @@ import io
 import pandas as pd
 from fastapi import APIRouter, File, Form, UploadFile
 
-from repositories import database as db
+from repositories import reading_repository
 
 router = APIRouter()
 
@@ -19,10 +19,7 @@ async def upload(user_id: str = Form(...), file: UploadFile = File(...)):
         else:
             return {"reply": "Поддерживаются только файлы CSV и Excel."}
 
-        conn = db.get_connection()
-        db.ensure_user(conn, user_id)
-        stats = db.import_dataframe(conn, data, user_id)
-        conn.close()
+        stats = reading_repository.import_dataframe(data, user_id)
 
         reply = (
             "✅ Данные загружены!\n"

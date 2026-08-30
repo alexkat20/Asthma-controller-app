@@ -1,6 +1,6 @@
 import pandas as pd
 
-from repositories import database as db
+from repositories import extra_info_repository, medicine_repository, reading_repository
 from utils.dates import build_date_filter
 
 _FLAG_COLUMNS = ["sport", "sickness", "stress", "allergy", "flight"]
@@ -16,11 +16,9 @@ _FLAG_LABELS = {
 def build_export_csv(user_id: str, days, custom_range):
     start_str, end_str, label = build_date_filter(days, custom_range)
 
-    conn = db.get_connection()
-    readings = db.fetch_full_readings_df(conn, user_id, start_str, end_str)
-    meds = db.fetch_medicine_doses_df(conn, user_id, start_str, end_str)
-    flags = db.fetch_flags_df(conn, user_id, start_str, end_str)
-    conn.close()
+    readings = reading_repository.fetch_full_readings_df(user_id, start_str, end_str)
+    meds = medicine_repository.fetch_medicine_doses_df(user_id, start_str, end_str)
+    flags = extra_info_repository.fetch_flags_df(user_id, start_str, end_str)
 
     if readings.empty:
         return None, label

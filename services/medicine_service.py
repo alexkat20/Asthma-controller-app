@@ -1,4 +1,4 @@
-from repositories import database as db
+from repositories import medicine_repository
 
 
 def add_medicine_from_text(user_id: str, text: str) -> str:
@@ -13,9 +13,7 @@ def add_medicine_from_text(user_id: str, text: str) -> str:
             "с запятой, например: «Симбикорт; 2 дозы»."
         )
 
-    conn = db.get_connection()
-    status = db.add_medicine(conn, user_id, name, dose)
-    conn.close()
+    status = medicine_repository.add_medicine(user_id, name, dose)
 
     if status == "exists":
         return (

@@ -1,5 +1,4 @@
 from repositories import settings_repository as settings_repo
-from repositories.database import get_connection
 from repositories.profile_repository import get_profile
 from services import allergy_service
 
@@ -11,19 +10,12 @@ def set_user_location(user_id: str, city_text: str) -> str:
             f"Не нашёл город «{city_text}». Проверьте написание или укажите ближайший крупный город "
             "(например: «город Berlin» или «город Санкт-Петербург»)."
         )
-    conn = get_connection()
-    settings_repo.save_user_location(
-        conn, user_id, geo["label"], geo["lat"], geo["lon"]
-    )
-    conn.close()
+    settings_repo.save_user_location(user_id, geo["label"], geo["lat"], geo["lon"])
     return f"📍 Город сохранён: {geo['label']}. Буду учитывать пыльцу для этого региона в утренних уведомлениях."
 
 
 def get_user_location(user_id: str):
-    conn = get_connection()
-    loc = settings_repo.get_user_location(conn, user_id)
-    conn.close()
-    return loc
+    return settings_repo.get_user_location(user_id)
 
 
 def run_allergy_check(user_id: str) -> str:

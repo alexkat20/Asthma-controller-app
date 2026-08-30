@@ -3,7 +3,6 @@ from datetime import datetime, timedelta
 from models.schemas import ChatOut
 from repositories import act_repository as act_repo
 from repositories import profile_repository as profile_repo
-from repositories.database import get_connection
 from services import notification_service
 from utils.formatting import MAIN_MENU
 
@@ -77,9 +76,7 @@ def interpret_score(total: int) -> str:
 
 
 def _next_due_date(user_id: str):
-    conn = get_connection()
-    last = act_repo.get_last_act(conn, user_id)
-    conn.close()
+    last = act_repo.get_last_act(user_id)
 
     if last:
         base = datetime.fromisoformat(last["date"])
@@ -133,12 +130,10 @@ def continue_act(user_id: str, session: dict, text: str) -> ChatOut:
     session["act_step"] = None
     total = sum(answers)
 
-    conn = get_connection()
     act_repo.save_act_result(
-        conn, user_id, answers, total, datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        user_id, answers, total, datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     )
-    previous = act_repo.get_act_history(conn, user_id, limit=2)
-    conn.close()
+    previous = act_repo.get_act_history(user_id, limit=2)
 
     trend_line = ""
     if len(previous) >= 2:
@@ -160,9 +155,7 @@ def continue_act(user_id: str, session: dict, text: str) -> ChatOut:
 
 
 def show_act_status(user_id: str) -> str:
-    conn = get_connection()
-    last = act_repo.get_last_act(conn, user_id)
-    conn.close()
+    last = act_repo.get_last_act(user_id)
     if last is None:
         return "Вы ещё не проходили тест контроля астмы. Напишите «тест контроля», чтобы пройти его сейчас."
     date_label = last["date"].split(" ")[0]
@@ -178,11 +171,9 @@ def check_and_notify_due_users() -> None:
     for user_id in profile_repo.list_user_ids():
         if not is_act_due(user_id):
             continue
-        conn = get_connection()
-        already_notified_today = act_repo.get_last_notified(conn, user_id) == today_str
+        already_notified_today = act_repo.get_last_notified(user_id) == today_str
         if not already_notified_today:
-            act_repo.mark_notified(conn, user_id, today_str)
-        conn.close()
+            act_repo.mark_notified(user_id, today_str)
         if not already_notified_today:
             notification_service.push(
                 user_id,

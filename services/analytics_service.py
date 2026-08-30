@@ -8,7 +8,7 @@ import pandas as pd
 import seaborn as sns
 from matplotlib.figure import Figure
 
-from repositories import database as db
+from repositories import extra_info_repository, medicine_repository, reading_repository
 from services import forecast_service
 from utils.dates import ALL_TIME, build_date_filter, classify_period
 from utils.formatting import FLAG_RU, ZONE_RU
@@ -64,10 +64,8 @@ def _diurnal_variation_text(df: pd.DataFrame) -> str:
 
 def run_analysis(user_id: str, days, custom_range) -> tuple:
     start_str, end_str, label = build_date_filter(days, custom_range)
-    conn = db.get_connection()
-    df = db.fetch_readings_df(conn, user_id, start_str, end_str)
+    df = reading_repository.fetch_readings_df(user_id, start_str, end_str)
     if df.empty:
-        conn.close()
         return f"Нет данных за {label}.", []
 
     df["date"] = pd.to_datetime(df["date"])
@@ -75,9 +73,8 @@ def run_analysis(user_id: str, days, custom_range) -> tuple:
     df["day_key"] = df["date"].dt.normalize()
     daily = df.groupby("day_key", as_index=False)["maximum"].mean()
 
-    flags = db.fetch_flags_df(conn, user_id, start_str, end_str)
-    meds = db.fetch_medicine_doses_df(conn, user_id, start_str, end_str)
-    conn.close()
+    flags = extra_info_repository.fetch_flags_df(user_id, start_str, end_str)
+    meds = medicine_repository.fetch_medicine_doses_df(user_id, start_str, end_str)
 
     merged = daily.copy()
     flag_cols = ["sport", "sickness", "stress", "allergy", "flight"]
@@ -169,10 +166,8 @@ def run_analysis(user_id: str, days, custom_range) -> tuple:
 
 def run_plot(user_id: str, days, custom_range) -> tuple:
     start_str, end_str, label = build_date_filter(days, custom_range)
-    conn = db.get_connection()
-    df = db.fetch_readings_df(conn, user_id, start_str, end_str)
-    thresholds = db.calculate_zone_thresholds(conn, user_id, datetime.now())
-    conn.close()
+    df = reading_repository.fetch_readings_df(user_id, start_str, end_str)
+    thresholds = reading_repository.calculate_zone_thresholds(user_id, datetime.now())
 
     if df.empty:
         return f"Нет данных за {label}.", []
@@ -234,10 +229,8 @@ def run_plot(user_id: str, days, custom_range) -> tuple:
 
 
 def run_predict(user_id: str) -> tuple:
-    conn = db.get_connection()
-    today = forecast_service.forecast_today_by_period(conn, user_id)
-    week = forecast_service.forecast_week_by_period(conn, user_id)
-    conn.close()
+    today = forecast_service.forecast_today_by_period(user_id)
+    week = forecast_service.forecast_week_by_period(user_id)
 
     today_m, today_e = today["morning"], today["evening"]
     week_m, week_e = week["morning"], week["evening"]

@@ -2,7 +2,6 @@ import re
 from datetime import datetime
 
 from models.schemas import ChatOut, QuickReply
-from repositories import database as db
 from repositories import session_repository
 from repositories.profile_repository import profile_exists
 from services import (
@@ -60,25 +59,17 @@ def _export_download_url(user_id: str, days, custom_range) -> str:
     return f"/api/export/{user_id}?days={days}"
 
 
-def get_session(user_id: str) -> dict:
-    conn = db.get_connection()
-    try:
-        stored = session_repository.load_session(conn, user_id)
-    finally:
-        conn.close()
+def get_chat_session(user_id: str) -> dict:
+    stored = session_repository.load_session(user_id)
     session = dict(_DEFAULT_SESSION)
     session.update(stored)
     return session
 
 
 def _persist_session(user_id: str, session: dict) -> None:
-    conn = db.get_connection()
-    try:
-        session_repository.save_session(
-            conn, user_id, session, datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        )
-    finally:
-        conn.close()
+    session_repository.save_session(
+        user_id, session, datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    )
 
 
 def _reset_wizards(session: dict) -> None:
@@ -111,7 +102,7 @@ def _table_days_prompt() -> ChatOut:
 
 
 def process_message(user_id: str, text: str, command: str | None = None) -> ChatOut:
-    session = get_session(user_id)
+    session = get_chat_session(user_id)
     t = text.strip()
     tl = t.lower()
 

@@ -2,9 +2,8 @@ import socket
 import time
 import uuid
 
-from repositories import database as db
 from repositories import scheduler_lock_repository as lock_repo
-from repositories.database import init_db
+from repositories.db_engine import init_db
 from services import act_service
 from services.reminder_service import check_reminders
 
@@ -27,14 +26,12 @@ def _run_one_tick() -> None:
 
 def main() -> None:
     init_db()
-    print(f"[scheduler] запущен, holder_id={HOLDER_ID}, интервал={CHECK_INTERVAL_SECONDS}с")
+    print(
+        f"[scheduler] запущен, holder_id={HOLDER_ID}, интервал={CHECK_INTERVAL_SECONDS}с"
+    )
 
     while True:
-        conn = db.get_connection()
-        try:
-            got_lock = lock_repo.try_acquire(conn, HOLDER_ID, LOCK_LEASE_SECONDS)
-        finally:
-            conn.close()
+        got_lock = lock_repo.try_acquire(HOLDER_ID, LOCK_LEASE_SECONDS)
 
         if got_lock:
             _run_one_tick()

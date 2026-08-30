@@ -1,7 +1,6 @@
 from datetime import datetime
 
 from models.schemas import ChatOut
-from repositories import database as db
 from repositories import treatment_plan_repository as plan_repo
 from utils.formatting import MAIN_MENU
 
@@ -38,11 +37,7 @@ def continue_plan_edit(user_id: str, session: dict, text: str) -> ChatOut:
     data = session.pop("plan_data", {})
     session["plan_step"] = None
 
-    conn = db.get_connection()
-    plan_repo.save_plan(
-        conn, user_id, data, datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    )
-    conn.close()
+    plan_repo.save_plan(user_id, data, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
     return ChatOut(
         reply="План лечения сохранён.\n\n" + show_plan(user_id), quick_replies=MAIN_MENU
@@ -50,9 +45,7 @@ def continue_plan_edit(user_id: str, session: dict, text: str) -> ChatOut:
 
 
 def show_plan(user_id: str) -> str:
-    conn = db.get_connection()
-    plan = plan_repo.get_plan(conn, user_id)
-    conn.close()
+    plan = plan_repo.get_plan(user_id)
 
     if plan is None or not any(plan.get(k) for k in PLAN_ORDER):
         return "План лечения ещё не задан. Напишите «план лечения», чтобы заполнить."
@@ -68,18 +61,14 @@ def get_guidance_for_zone(user_id: str, zone: str) -> str | None:
     field = {"yellow": "worsening_therapy", "red": "attack_therapy"}.get(zone)
     if field is None:
         return None
-    conn = db.get_connection()
-    plan = plan_repo.get_plan(conn, user_id)
-    conn.close()
+    plan = plan_repo.get_plan(user_id)
     if plan is None:
         return None
     return plan.get(field)
 
 
 def get_attack_guidance(user_id: str) -> str | None:
-    conn = db.get_connection()
-    plan = plan_repo.get_plan(conn, user_id)
-    conn.close()
+    plan = plan_repo.get_plan(user_id)
     if plan is None:
         return None
     return plan.get("attack_therapy")

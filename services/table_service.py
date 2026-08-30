@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 
-from repositories import database as db
+from repositories import extra_info_repository, medicine_repository, reading_repository
 from repositories import profile_repository as profile_repo
 from utils.dates import PERIOD_RU, classify_period
 from utils.formatting import FLAG_RU
@@ -44,11 +44,9 @@ def _collect(user_id: str, days: int):
     start_str = start.strftime("%Y-%m-%d %H:%M:%S")
     end_str = end.strftime("%Y-%m-%d %H:%M:%S")
 
-    conn = db.get_connection()
-    readings = db.fetch_full_readings_df(conn, user_id, start_str, end_str)
-    meds = db.fetch_medicine_doses_df(conn, user_id, start_str, end_str)
-    extra = db.fetch_extra_info_full_df(conn, user_id, start_str, end_str)
-    conn.close()
+    readings = reading_repository.fetch_full_readings_df(user_id, start_str, end_str)
+    meds = medicine_repository.fetch_medicine_doses_df(user_id, start_str, end_str)
+    extra = extra_info_repository.fetch_extra_info_full_df(user_id, start_str, end_str)
 
     profile = profile_repo.get_profile(user_id)
     label = _period_label(days)

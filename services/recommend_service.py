@@ -1,7 +1,7 @@
 import pandas as pd
 
-from models.domain import ZoneThresholds
-from repositories import database as dbmod
+from models.domain import ZoneThresholds, classify_zone
+from repositories import medicine_repository, reading_repository
 
 RU_MEDICINE_NOTE = (
     "на основе истории — не является медицинской рекомендацией, "
@@ -15,11 +15,11 @@ def _classify_row(row) -> str:
     thresholds = ZoneThresholds(
         personal_best=0, green_zone=row["green_zone"], yellow_zone=row["yellow_zone"]
     )
-    return dbmod.classify_zone(row["maximum"], thresholds)
+    return classify_zone(row["maximum"], thresholds)
 
 
-def recommend_medicine(conn, user_id: str, min_occurrences: int = 3) -> dict | None:
-    readings = dbmod.fetch_all_readings_with_zones_df(conn, user_id)
+def recommend_medicine(user_id: str, min_occurrences: int = 3) -> dict | None:
+    readings = reading_repository.fetch_all_readings_with_zones_df(user_id)
     if readings.empty:
         return None
 
@@ -41,7 +41,7 @@ def recommend_medicine(conn, user_id: str, min_occurrences: int = 3) -> dict | N
     if bad_days.empty:
         return None
 
-    meds = dbmod.fetch_all_taken_medicine_with_names_df(conn, user_id)
+    meds = medicine_repository.fetch_all_taken_medicine_with_names_df(user_id)
     if meds.empty:
         return None
     meds["day"] = pd.to_datetime(meds["date"]).dt.normalize()
@@ -82,7 +82,7 @@ def recommend_medicine(conn, user_id: str, min_occurrences: int = 3) -> dict | N
             "used": int(med_counts.max()),
             "baseline_recovery_rate": baseline_recovery,
             "note": f"недостаточно повторов для статистики восстановления — показан просто самый часто используемый"
-                    f" в такие дни препарат ({RU_MEDICINE_NOTE})",
+            f" в такие дни препарат ({RU_MEDICINE_NOTE})",
         }
 
     candidates.sort(key=lambda c: (c["recovery_rate"], c["used"]), reverse=True)
