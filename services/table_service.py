@@ -2,8 +2,8 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 
-from repositories import extra_info_repository, medicine_repository, reading_repository
-from repositories import profile_repository as profile_repo
+from repositories.extra_info_repository import EXTRA_INFO_FLAGS
+from repositories.unit_of_work import UnitOfWork
 from utils.dates import PERIOD_RU, classify_period
 from utils.formatting import FLAG_RU
 
@@ -44,11 +44,12 @@ def _collect(user_id: str, days: int):
     start_str = start.strftime("%Y-%m-%d %H:%M:%S")
     end_str = end.strftime("%Y-%m-%d %H:%M:%S")
 
-    readings = reading_repository.fetch_full_readings_df(user_id, start_str, end_str)
-    meds = medicine_repository.fetch_medicine_doses_df(user_id, start_str, end_str)
-    extra = extra_info_repository.fetch_extra_info_full_df(user_id, start_str, end_str)
+    with UnitOfWork() as uow:
+        readings = uow.readings.fetch_full_readings_df(user_id, start_str, end_str)
+        meds = uow.medicines.fetch_medicine_doses_df(user_id, start_str, end_str)
+        extra = uow.extra_info.fetch_extra_info_full_df(user_id, start_str, end_str)
+        profile = uow.profiles.get_profile(user_id)
 
-    profile = profile_repo.get_profile(user_id)
     label = _period_label(days)
 
     if readings.empty:
@@ -91,9 +92,7 @@ def build_table_data(user_id: str, days: int):
         extra_row = extra_by_date.get(r.date)
         if extra_row is not None:
             active_flags = [
-                FLAG_RU[f]
-                for f in ("sport", "sickness", "stress", "allergy", "flight")
-                if getattr(extra_row, f)
+                FLAG_RU[f] for f in EXTRA_INFO_FLAGS if getattr(extra_row, f)
             ]
             state_display = ", ".join(active_flags) or "нет"
             attacks = (

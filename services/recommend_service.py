@@ -1,7 +1,7 @@
 import pandas as pd
 
 from models.domain import ZoneThresholds, classify_zone
-from repositories import medicine_repository, reading_repository
+from repositories.unit_of_work import UnitOfWork
 
 RU_MEDICINE_NOTE = (
     "на основе истории — не является медицинской рекомендацией, "
@@ -19,9 +19,11 @@ def _classify_row(row) -> str:
 
 
 def recommend_medicine(user_id: str, min_occurrences: int = 3) -> dict | None:
-    readings = reading_repository.fetch_all_readings_with_zones_df(user_id)
-    if readings.empty:
-        return None
+    with UnitOfWork() as uow:
+        readings = uow.readings.fetch_all_readings_with_zones_df(user_id)
+        if readings.empty:
+            return None
+        meds = uow.medicines.fetch_all_taken_medicine_with_names_df(user_id)
 
     readings["date"] = pd.to_datetime(readings["date"])
     readings["day"] = readings["date"].dt.normalize()
@@ -41,7 +43,6 @@ def recommend_medicine(user_id: str, min_occurrences: int = 3) -> dict | None:
     if bad_days.empty:
         return None
 
-    meds = medicine_repository.fetch_all_taken_medicine_with_names_df(user_id)
     if meds.empty:
         return None
     meds["day"] = pd.to_datetime(meds["date"]).dt.normalize()

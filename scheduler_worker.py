@@ -2,8 +2,8 @@ import socket
 import time
 import uuid
 
-from repositories import scheduler_lock_repository as lock_repo
 from repositories.db_engine import init_db
+from repositories.unit_of_work import UnitOfWork
 from services import act_service
 from services.reminder_service import check_reminders
 
@@ -31,7 +31,8 @@ def main() -> None:
     )
 
     while True:
-        got_lock = lock_repo.try_acquire(HOLDER_ID, LOCK_LEASE_SECONDS)
+        with UnitOfWork() as uow:
+            got_lock = uow.scheduler_lock.try_acquire(HOLDER_ID, LOCK_LEASE_SECONDS)
 
         if got_lock:
             _run_one_tick()

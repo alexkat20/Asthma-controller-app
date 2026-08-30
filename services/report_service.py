@@ -2,9 +2,7 @@ from datetime import datetime
 
 import pandas as pd
 
-from repositories import act_repository as act_repo
-from repositories import medicine_repository, reading_repository
-from repositories import profile_repository as profile_repo
+from repositories.unit_of_work import UnitOfWork
 from services import analytics_service
 from utils.dates import build_date_filter
 from utils.formatting import GENDER_RU, SMOKING_RU
@@ -22,7 +20,8 @@ _ALLERGY_RU = {
 
 
 def _profile_block(user_id: str) -> str:
-    profile = profile_repo.get_profile(user_id)
+    with UnitOfWork() as uow:
+        profile = uow.profiles.get_profile(user_id)
     if profile is None:
         return "<p>Профиль не заполнен.</p>"
     allergens = profile.get("allergies") or []
@@ -53,7 +52,8 @@ def _profile_block(user_id: str) -> str:
 
 
 def _zone_block(user_id: str) -> str:
-    thresholds = reading_repository.calculate_zone_thresholds(user_id, datetime.now())
+    with UnitOfWork() as uow:
+        thresholds = uow.readings.calculate_zone_thresholds(user_id, datetime.now())
     if thresholds is None:
         return "<p>Недостаточно данных для расчёта зон.</p>"
     return (
@@ -68,7 +68,8 @@ def _zone_block(user_id: str) -> str:
 
 def _medicine_usage_block(user_id: str, days: int) -> str:
     start_str, end_str, _ = build_date_filter(days, None)
-    meds = medicine_repository.fetch_medicine_doses_df(user_id, start_str, end_str)
+    with UnitOfWork() as uow:
+        meds = uow.medicines.fetch_medicine_doses_df(user_id, start_str, end_str)
     if meds.empty:
         return "<p>Нет данных о приёме препаратов за период.</p>"
     totals = (
@@ -83,8 +84,28 @@ def _medicine_usage_block(user_id: str, days: int) -> str:
     return f"<table><tr><th>Препарат</th><th>Суммарно доз за период</th></tr>{rows}</table>"
 
 
+def _diurnal_block(user_id: str, days: int) -> str:
+    stats = analytics_service.diurnal_comparison(user_id, days, None)
+    if stats is None:
+        return (
+            "<p>Недостаточно дней с обоими замерами (утро и вечер) за период, "
+            "чтобы сравнить.</p>"
+        )
+    return (
+        "<table>"
+        f"<tr><th>Дней с обоими замерами</th><td>{stats['days_count']}</td></tr>"
+        f"<tr><th>Средний утренний пикфлоу</th><td>{stats['morning_avg']:.0f}</td></tr>"
+        f"<tr><th>Средний вечерний пикфлоу</th><td>{stats['evening_avg']:.0f}</td></tr>"
+        "<tr><th>Разница (вечер − утро)</th>"
+        f"<td>{stats['avg_diff']:+.0f} л/мин ({stats['pct_diff']:+.0f}%)</td></tr>"
+        f"<tr><th>Интерпретация</th><td>{stats['interpretation']}</td></tr>"
+        "</table>"
+    )
+
+
 def _act_block(user_id: str) -> str:
-    history = act_repo.get_act_history(user_id, limit=12)
+    with UnitOfWork() as uow:
+        history = uow.act.get_act_history(user_id, limit=12)
     if not history:
         return "<p>Тест контроля астмы (ACT) ещё не проходился.</p>"
     rows = "".join(
@@ -134,6 +155,9 @@ def generate_doctor_report_html(user_id: str, days: int = REPORT_PERIOD_DAYS) ->
 
   <h2>Динамика показаний</h2>
   <p>{plot_text}</p>
+
+  <h2>Утро vs вечер</h2>
+  {_diurnal_block(user_id, days)}
 
   <h2>Статистика и корреляции</h2>
   <p style="white-space: pre-wrap">{analysis_text}</p>

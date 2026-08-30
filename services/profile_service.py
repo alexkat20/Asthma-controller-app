@@ -1,7 +1,7 @@
 import re
 
 from models.schemas import ChatOut
-from repositories import profile_repository as profile_repo
+from repositories.unit_of_work import UnitOfWork
 from services import act_service, allergy_service, location_service
 from utils.formatting import GENDER_RU, SMOKING_RU, welcome_text
 
@@ -111,7 +111,9 @@ def continue_onboarding(user_id: str, session: dict, text: str) -> ChatOut:
         return ChatOut(reply=prompt, quick_replies=options)
 
     session["onboarding_step"] = None
-    profile_repo.save_profile(user_id, data)
+    with UnitOfWork() as uow:
+        uow.profiles.save_profile(user_id, data)
+        uow.commit()
 
     location_reply = None
     location_label = None
@@ -136,7 +138,8 @@ def continue_onboarding(user_id: str, session: dict, text: str) -> ChatOut:
 
 
 def show_profile(user_id: str) -> str:
-    profile = profile_repo.get_profile(user_id)
+    with UnitOfWork() as uow:
+        profile = uow.profiles.get_profile(user_id)
     if profile is None:
         return "Профиль ещё не заполнен."
     loc = location_service.get_user_location(user_id)

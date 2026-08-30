@@ -1,8 +1,7 @@
 from datetime import datetime, timedelta
 
 from models.schemas import ChatOut
-from repositories import act_repository as act_repo
-from repositories import profile_repository as profile_repo
+from repositories.unit_of_work import UnitOfWork
 from services import notification_service
 from utils.formatting import MAIN_MENU
 
@@ -76,12 +75,13 @@ def interpret_score(total: int) -> str:
 
 
 def _next_due_date(user_id: str):
-    last = act_repo.get_last_act(user_id)
+    with UnitOfWork() as uow:
+        last = uow.act.get_last_act(user_id)
+        created_at = None if last else uow.profiles.get_created_at(user_id)
 
     if last:
         base = datetime.fromisoformat(last["date"])
     else:
-        created_at = profile_repo.get_created_at(user_id)
         if created_at is None:
             return None
         base = datetime.fromisoformat(created_at)
@@ -130,10 +130,14 @@ def continue_act(user_id: str, session: dict, text: str) -> ChatOut:
     session["act_step"] = None
     total = sum(answers)
 
-    act_repo.save_act_result(
-        user_id, answers, total, datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    )
-    previous = act_repo.get_act_history(user_id, limit=2)
+    with UnitOfWork() as uow:
+        uow.act.save_act_result(
+            user_id, answers, total, datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        )
+        uow.commit()
+
+    with UnitOfWork() as uow:
+        previous = uow.act.get_act_history(user_id, limit=2)
 
     trend_line = ""
     if len(previous) >= 2:
@@ -155,7 +159,8 @@ def continue_act(user_id: str, session: dict, text: str) -> ChatOut:
 
 
 def show_act_status(user_id: str) -> str:
-    last = act_repo.get_last_act(user_id)
+    with UnitOfWork() as uow:
+        last = uow.act.get_last_act(user_id)
     if last is None:
         return "Вы ещё не проходили тест контроля астмы. Напишите «тест контроля», чтобы пройти его сейчас."
     date_label = last["date"].split(" ")[0]
@@ -168,12 +173,16 @@ def show_act_status(user_id: str) -> str:
 def check_and_notify_due_users() -> None:
     """Вызывается из фонового планировщика (services/reminder_service.py)."""
     today_str = datetime.now().strftime("%Y-%m-%d")
-    for user_id in profile_repo.list_user_ids():
+    with UnitOfWork() as uow:
+        user_ids = uow.profiles.list_user_ids()
+    for user_id in user_ids:
         if not is_act_due(user_id):
             continue
-        already_notified_today = act_repo.get_last_notified(user_id) == today_str
-        if not already_notified_today:
-            act_repo.mark_notified(user_id, today_str)
+        with UnitOfWork() as uow:
+            already_notified_today = uow.act.get_last_notified(user_id) == today_str
+            if not already_notified_today:
+                uow.act.mark_notified(user_id, today_str)
+            uow.commit()
         if not already_notified_today:
             notification_service.push(
                 user_id,

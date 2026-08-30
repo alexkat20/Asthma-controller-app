@@ -4,10 +4,14 @@ import numpy as np
 import pandas as pd
 
 from models.domain import classify_zone
-from repositories import extra_info_repository, reading_repository
+from repositories.extra_info_repository import EXTRA_INFO_FLAGS
+from repositories.unit_of_work import UnitOfWork
 from utils.dates import DATE_FORMAT, classify_period
 
-FLAG_COLUMNS = ["sport", "sickness", "stress", "allergy", "flight"]
+# Триггеры и симптомы, отмеченные накануне, используются как предикторы
+# сегодняшнего пикфлоу (см. _flag_effects/_predict_value) — вчерашние
+# симптомы (кашель, хрипы и т.п.) не менее показательны, чем триггеры.
+FLAG_COLUMNS = EXTRA_INFO_FLAGS
 
 
 def _load_history(
@@ -20,7 +24,8 @@ def _load_history(
     суточная динамика лёгких, а не ухудшение; смешивать их в одну базовую
     линию означало бы искажать оба прогноза)."""
     since_str = (datetime.now() - timedelta(days=lookback_days)).strftime(DATE_FORMAT)
-    df = reading_repository.fetch_history_since_df(user_id, since_str)
+    with UnitOfWork() as uow:
+        df = uow.readings.fetch_history_since_df(user_id, since_str)
     if df.empty:
         return df
     if period is not None:
@@ -32,7 +37,8 @@ def _load_history(
 
 def _load_flags(user_id: str, lookback_days: int = 365) -> pd.DataFrame:
     since_str = (datetime.now() - timedelta(days=lookback_days)).strftime(DATE_FORMAT)
-    df = extra_info_repository.fetch_flags_since_df(user_id, since_str)
+    with UnitOfWork() as uow:
+        df = uow.extra_info.fetch_flags_since_df(user_id, since_str)
     if not df.empty:
         df["date"] = pd.to_datetime(df["date"]).dt.normalize()
     return df
@@ -140,7 +146,8 @@ def forecast_today(user_id: str, period: str | None = None) -> dict | None:
         active_flags,
     )
 
-    thresholds = reading_repository.calculate_zone_thresholds(user_id, datetime.now())
+    with UnitOfWork() as uow:
+        thresholds = uow.readings.calculate_zone_thresholds(user_id, datetime.now())
     zone = classify_zone(predicted, thresholds) if thresholds else "unknown"
 
     return {
@@ -159,7 +166,8 @@ def forecast_week(user_id: str, period: str | None = None) -> list:
     if ctx is None:
         return []
 
-    thresholds = reading_repository.calculate_zone_thresholds(user_id, datetime.now())
+    with UnitOfWork() as uow:
+        thresholds = uow.readings.calculate_zone_thresholds(user_id, datetime.now())
     today = pd.Timestamp(datetime.now().date())
     yesterday = today - pd.Timedelta(days=1)
 

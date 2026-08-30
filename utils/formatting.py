@@ -7,11 +7,24 @@ ZONE_RU = {
     "unknown": "нет данных",
 }
 FLAG_RU = {
+    # Триггеры
     "sport": "спорт",
     "sickness": "болезнь",
     "stress": "стресс",
     "allergy": "аллергия",
     "flight": "перелёт",
+    "weather": "погода/холодный воздух",
+    "smoke": "дым",
+    "strong_smells": "резкие запахи/химия",
+    "pets": "домашние животные",
+    "dust": "пыль",
+    "menstrual_cycle": "менструальный цикл",
+    # Симптомы
+    "dyspnea": "одышка",
+    "cough": "кашель",
+    "wheezing": "хрипы/свист при дыхании",
+    "chest_tightness": "заложенность в груди",
+    "nocturnal_symptoms": "ночные симптомы",
 }
 GENDER_RU = {"male": "мужской", "female": "женский", None: "не указан"}
 SMOKING_RU = {"no": "не курит", "yes": "курит", "quit": "бросил(а)", None: "не указано"}

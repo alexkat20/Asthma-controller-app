@@ -44,11 +44,24 @@ class ExtraInfo(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.user_id"))
     date: Mapped[str] = mapped_column(String)
+    # Триггеры — что могло спровоцировать приступ/ухудшение.
     sport: Mapped[bool] = mapped_column(Boolean, default=False)
     sickness: Mapped[bool] = mapped_column(Boolean, default=False)
     stress: Mapped[bool] = mapped_column(Boolean, default=False)
     allergy: Mapped[bool] = mapped_column(Boolean, default=False)
     flight: Mapped[bool] = mapped_column(Boolean, default=False)
+    weather: Mapped[bool] = mapped_column(Boolean, default=False)
+    smoke: Mapped[bool] = mapped_column(Boolean, default=False)
+    strong_smells: Mapped[bool] = mapped_column(Boolean, default=False)
+    pets: Mapped[bool] = mapped_column(Boolean, default=False)
+    dust: Mapped[bool] = mapped_column(Boolean, default=False)
+    menstrual_cycle: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Симптомы — что пользователь почувствовал.
+    dyspnea: Mapped[bool] = mapped_column(Boolean, default=False)
+    cough: Mapped[bool] = mapped_column(Boolean, default=False)
+    wheezing: Mapped[bool] = mapped_column(Boolean, default=False)
+    chest_tightness: Mapped[bool] = mapped_column(Boolean, default=False)
+    nocturnal_symptoms: Mapped[bool] = mapped_column(Boolean, default=False)
     attacks_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     record_time: Mapped[str | None] = mapped_column(String, nullable=True)  # "ЧЧ:ММ"
 

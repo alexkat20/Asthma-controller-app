@@ -2,8 +2,7 @@ import re
 from datetime import datetime
 
 from models.schemas import ChatOut, QuickReply
-from repositories import session_repository
-from repositories.profile_repository import profile_exists
+from repositories.unit_of_work import UnitOfWork
 from services import (
     act_service,
     analytics_service,
@@ -60,16 +59,19 @@ def _export_download_url(user_id: str, days, custom_range) -> str:
 
 
 def get_chat_session(user_id: str) -> dict:
-    stored = session_repository.load_session(user_id)
+    with UnitOfWork() as uow:
+        stored = uow.chat_sessions.load_session(user_id)
     session = dict(_DEFAULT_SESSION)
     session.update(stored)
     return session
 
 
 def _persist_session(user_id: str, session: dict) -> None:
-    session_repository.save_session(
-        user_id, session, datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    )
+    with UnitOfWork() as uow:
+        uow.chat_sessions.save_session(
+            user_id, session, datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        )
+        uow.commit()
 
 
 def _reset_wizards(session: dict) -> None:
@@ -121,7 +123,9 @@ def _process_full(
 ) -> ChatOut:
     if session.get("onboarding_step"):
         return profile_service.continue_onboarding(user_id, session, t)
-    if not profile_exists(user_id):
+    with UnitOfWork() as uow:
+        exists = uow.profiles.profile_exists(user_id)
+    if not exists:
         return profile_service.start_onboarding(session)
 
     if tl in GREETINGS:
@@ -139,8 +143,10 @@ def _process_full(
         return logging_service.handle_dose_count_step(user_id, session, t)
     if log_step == "attacks":
         return logging_service.handle_attacks_step(user_id, session, t)
-    if log_step == "state":
-        return logging_service.handle_state_step(user_id, session, t)
+    if log_step == "triggers":
+        return logging_service.handle_triggers_step(user_id, session, t)
+    if log_step == "symptoms":
+        return logging_service.handle_symptoms_step(user_id, session, t)
 
     if session.get("plan_step") is not None:
         return treatment_plan_service.continue_plan_edit(user_id, session, t)

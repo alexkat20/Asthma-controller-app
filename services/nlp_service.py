@@ -1,6 +1,9 @@
 import re
 
+from repositories.extra_info_repository import EXTRA_INFO_FLAGS
+
 STATE_KEYWORDS = {
+    # --- триггеры -----------------------------------------------------
     "sport": [
         "спорт",
         "трениров",
@@ -27,8 +30,6 @@ STATE_KEYWORDS = {
         "температур",
         "орви",
         "просты",
-        "кашел",
-        "кашл",
         "грипп",
         "недомога",
         "заболел",
@@ -73,13 +74,99 @@ STATE_KEYWORDS = {
         "flight",
         "plane",
     ],
+    "weather": [
+        "погод",
+        "холод",
+        "мороз",
+        "ветер",
+        "дожд",
+        "сырост",
+        "влажност",
+        "weather",
+        "cold air",
+        "wind",
+    ],
+    "smoke": [
+        "дым",
+        "курени",
+        "накурен",
+        "сигарет",
+        "smoke",
+        "smoking",
+    ],
+    "strong_smells": [
+        "запах",
+        "духи",
+        "парфюм",
+        "бытовая хими",
+        "чистящ",
+        "spray",
+        "perfume",
+        "chemical smell",
+    ],
+    "pets": [
+        "кошк",
+        "кот",
+        "собак",
+        "шерст",
+        "питомц",
+        "pet",
+        "cat",
+        "dog",
+    ],
+    "dust": [
+        "пыль",
+        "dust",
+    ],
+    "menstrual_cycle": [
+        "менструац",
+        "месячны",
+        "пмс",
+        "цикл",
+        "period",
+        "menstrual",
+    ],
+    # --- симптомы -------------------------------------------------------
+    "dyspnea": [
+        "одышк",
+        "нехватк воздух",
+        "не хватает воздух",
+        "тяжело дыш",
+        "dyspnea",
+        "breathless",
+        "shortness of breath",
+    ],
+    "cough": [
+        "кашел",
+        "кашл",
+        "cough",
+    ],
+    "wheezing": [
+        "хрип",
+        "свист",
+        "wheez",
+    ],
+    "chest_tightness": [
+        "заложенност",
+        "давит в груди",
+        "стеснени в груди",
+        "тяжесть в груди",
+        "chest tightness",
+        "tight chest",
+    ],
+    "nocturnal_symptoms": [
+        "просыпал",
+        "будил",
+        "не спал из-за",
+        "ночью не",
+        "nocturnal",
+        "woke up at night",
+    ],
 }
 
 NEGATION_WORDS = ["не", "без", "нет", "никакого", "никакой", "no", "not", "without"]
-NEGATION_WINDOW_CHARS = (
-    15
-)
-FLAG_ORDER = ["sport", "sickness", "stress", "allergy", "flight"]
+NEGATION_WINDOW_CHARS = 15
+FLAG_ORDER = EXTRA_INFO_FLAGS
 
 MEDICINE_ALIASES = {
     "симбикорт": "Symbicort Turbuhaler",

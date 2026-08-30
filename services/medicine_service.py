@@ -1,4 +1,4 @@
-from repositories import medicine_repository
+from repositories.unit_of_work import UnitOfWork
 
 
 def add_medicine_from_text(user_id: str, text: str) -> str:
@@ -13,7 +13,9 @@ def add_medicine_from_text(user_id: str, text: str) -> str:
             "с запятой, например: «Симбикорт; 2 дозы»."
         )
 
-    status = medicine_repository.add_medicine(user_id, name, dose)
+    with UnitOfWork() as uow:
+        status = uow.medicines.add_medicine(user_id, name, dose)
+        uow.commit()
 
     if status == "exists":
         return (

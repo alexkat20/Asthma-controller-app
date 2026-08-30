@@ -2,22 +2,24 @@ import re
 from datetime import datetime
 
 from models.schemas import ChatOut
-from repositories import medicine_repository, reading_repository
+from repositories.extra_info_repository import (
+    EXTRA_INFO_FLAGS,
+    SYMPTOM_FLAGS,
+    TRIGGER_FLAGS,
+)
+from repositories.unit_of_work import UnitOfWork
 from services import nlp_service, recommend_service, treatment_plan_service
 from utils.dates import MORNING_CUTOFF_HOUR
 from utils.formatting import FLAG_RU, MAIN_MENU, ZONE_RU
 
 NO_MEDICINE_LABEL = "Без препарата"
-NO_STATE_LABEL = "Ничего из этого"
-STATE_QUICK_REPLIES = [
-    "Спорт",
-    "Стресс",
-    "Аллергия",
-    "Болезнь",
-    "Перелёт",
-    NO_STATE_LABEL,
-]
+NO_TRIGGERS_LABEL = "Ничего из этого"
+NO_SYMPTOMS_LABEL = "Ничего из этого"
 ATTACKS_QUICK_REPLIES = ["0", "1", "2", "3"]
+
+# «Менструальный цикл» как триггер имеет смысл предлагать кнопкой только
+# женщинам — но текстом (свободный ввод) его всё равно можно указать любому.
+_MENSTRUAL_FLAG = "menstrual_cycle"
 
 
 def _extract_numbers(text: str) -> list:
@@ -47,15 +49,53 @@ def _prompt_attacks_step(session: dict) -> ChatOut:
     )
 
 
-def _prompt_state_step(session: dict) -> ChatOut:
-    session["log_step"] = "state"
+def _trigger_quick_replies(user_id: str) -> list:
+    with UnitOfWork() as uow:
+        profile = uow.profiles.get_profile(user_id)
+    is_female = bool(profile) and profile.get("gender") == "female"
+    flags = (
+        TRIGGER_FLAGS
+        if is_female
+        else [f for f in TRIGGER_FLAGS if f != _MENSTRUAL_FLAG]
+    )
+    return [FLAG_RU[f].capitalize() for f in flags] + [NO_TRIGGERS_LABEL]
+
+
+def _symptom_quick_replies() -> list:
+    return [FLAG_RU[f].capitalize() for f in SYMPTOM_FLAGS] + [NO_SYMPTOMS_LABEL]
+
+
+def _prompt_triggers_step(session: dict, user_id: str) -> ChatOut:
+    session["log_step"] = "triggers"
     return ChatOut(
         reply=(
-            "Было ли сегодня что-то из этого: спорт, стресс, аллергия, болезнь, перелёт? "
+            "Было ли сегодня что-то, что могло повлиять на состояние (триггеры)? "
             "Перечислите через запятую или выберите «Ничего из этого»."
         ),
-        quick_replies=STATE_QUICK_REPLIES,
+        quick_replies=_trigger_quick_replies(user_id),
     )
+
+
+def _prompt_symptoms_step(session: dict) -> ChatOut:
+    session["log_step"] = "symptoms"
+    return ChatOut(
+        reply=(
+            "Были ли сегодня симптомы? Перечислите через запятую или выберите «Ничего из этого»."
+        ),
+        quick_replies=_symptom_quick_replies(),
+    )
+
+
+def _merge_detected_flags(session: dict, text: str, no_label: str) -> None:
+    tl = text.strip().lower()
+    if no_label.lower() not in tl and "ничего" not in tl:
+        new_flags = nlp_service.detect_state(text)
+        existing = session.setdefault("log_data", {}).get("flags") or {}
+        merged = {
+            key: existing.get(key, False) or new_flags.get(key, False)
+            for key in EXTRA_INFO_FLAGS
+        }
+        session["log_data"]["flags"] = merged
 
 
 def handle_reading_input(user_id: str, session: dict, text: str) -> ChatOut:
@@ -77,7 +117,8 @@ def handle_reading_input(user_id: str, session: dict, text: str) -> ChatOut:
     flags = nlp_service.detect_state(text)
     session["log_data"] = {"values": values, "flags": flags}
 
-    medicines = medicine_repository.list_medicines_with_doses(user_id)
+    with UnitOfWork() as uow:
+        medicines = uow.medicines.list_medicines_with_doses(user_id)
 
     if not medicines:
         return _prompt_attacks_step(session)
@@ -131,20 +172,16 @@ def handle_attacks_step(user_id: str, session: dict, text: str) -> ChatOut:
             quick_replies=ATTACKS_QUICK_REPLIES,
         )
     session.setdefault("log_data", {})["attacks_count"] = int(m.group(0))
-    return _prompt_state_step(session)
+    return _prompt_triggers_step(session, user_id)
 
 
-def handle_state_step(user_id: str, session: dict, text: str) -> ChatOut:
-    tl = text.strip().lower()
-    if NO_STATE_LABEL.lower() not in tl and "ничего" not in tl:
-        new_flags = nlp_service.detect_state(text)
-        existing = session.setdefault("log_data", {}).get("flags") or {}
-        merged = {
-            key: existing.get(key, False) or new_flags.get(key, False)
-            for key in FLAG_RU
-        }
-        session["log_data"]["flags"] = merged
+def handle_triggers_step(user_id: str, session: dict, text: str) -> ChatOut:
+    _merge_detected_flags(session, text, NO_TRIGGERS_LABEL)
+    return _prompt_symptoms_step(session)
 
+
+def handle_symptoms_step(user_id: str, session: dict, text: str) -> ChatOut:
+    _merge_detected_flags(session, text, NO_SYMPTOMS_LABEL)
     session["log_step"] = None
     data = session.pop("log_data", {})
     return _finalize(user_id, data, datetime.now())
@@ -166,16 +203,25 @@ def _finalize(user_id: str, data: dict, now: datetime) -> ChatOut:
     flags = data.get("flags") or {}
     attacks_count = data.get("attacks_count")
 
-    thresholds, zone = reading_repository.save_reading_entry(
-        user_id,
-        now,
-        *values,
-        medicine_name=medicine_name,
-        doses=doses,
-        flags=flags,
-        attacks_count=attacks_count,
-        record_time=record_time,
-    )
+    # Показания + (опционально) приём препарата + доп. состояние — одна
+    # бизнес-операция на несколько таблиц, поэтому один UnitOfWork: либо
+    # сохранится всё, либо (при ошибке) не сохранится ничего из этого.
+    with UnitOfWork() as uow:
+        uow.users.ensure_user(user_id)
+        _, thresholds, zone = uow.readings.insert_reading(user_id, now, *values)
+
+        if medicine_name and doses:
+            medicine_id = uow.medicines.get_or_create_medicine_id(
+                user_id, medicine_name
+            )
+            uow.medicines.add_taken_medicine(medicine_id, user_id, doses, date_str)
+
+        if attacks_count is not None or any(flags.values()):
+            uow.extra_info.add_extra_info(
+                user_id, date_str, flags, attacks_count, record_time
+            )
+
+        uow.commit()
     maximum = max(values)
 
     zone_messages = {

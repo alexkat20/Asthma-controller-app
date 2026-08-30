@@ -3,7 +3,7 @@ import io
 import pandas as pd
 from fastapi import APIRouter, File, Form, UploadFile
 
-from repositories import reading_repository
+from repositories.unit_of_work import UnitOfWork
 
 router = APIRouter()
 
@@ -19,7 +19,9 @@ async def upload(user_id: str = Form(...), file: UploadFile = File(...)):
         else:
             return {"reply": "Поддерживаются только файлы CSV и Excel."}
 
-        stats = reading_repository.import_dataframe(data, user_id)
+        with UnitOfWork() as uow:
+            stats = uow.readings.import_dataframe(data, user_id)
+            uow.commit()
 
         reply = (
             "✅ Данные загружены!\n"

@@ -1,5 +1,4 @@
-from repositories import settings_repository as settings_repo
-from repositories.profile_repository import get_profile
+from repositories.unit_of_work import UnitOfWork
 from services import allergy_service
 
 
@@ -10,12 +9,15 @@ def set_user_location(user_id: str, city_text: str) -> str:
             f"Не нашёл город «{city_text}». Проверьте написание или укажите ближайший крупный город "
             "(например: «город Berlin» или «город Санкт-Петербург»)."
         )
-    settings_repo.save_user_location(user_id, geo["label"], geo["lat"], geo["lon"])
+    with UnitOfWork() as uow:
+        uow.settings.save_user_location(user_id, geo["label"], geo["lat"], geo["lon"])
+        uow.commit()
     return f"📍 Город сохранён: {geo['label']}. Буду учитывать пыльцу для этого региона в утренних уведомлениях."
 
 
 def get_user_location(user_id: str):
-    return settings_repo.get_user_location(user_id)
+    with UnitOfWork() as uow:
+        return uow.settings.get_user_location(user_id)
 
 
 def run_allergy_check(user_id: str) -> str:
@@ -25,7 +27,8 @@ def run_allergy_check(user_id: str) -> str:
             "Сначала укажите город, чтобы я мог проверить пыльцу в вашем регионе: "
             "напишите, например, «город Москва»."
         )
-    profile = get_profile(user_id)
+    with UnitOfWork() as uow:
+        profile = uow.profiles.get_profile(user_id)
     user_allergens = profile["allergies"] if profile else None
     pollen = allergy_service.get_today_pollen(loc["lat"], loc["lon"])
     return (

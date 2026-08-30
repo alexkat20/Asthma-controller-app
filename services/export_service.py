@@ -1,24 +1,37 @@
 import pandas as pd
 
-from repositories import extra_info_repository, medicine_repository, reading_repository
+from repositories.extra_info_repository import EXTRA_INFO_FLAGS
+from repositories.unit_of_work import UnitOfWork
 from utils.dates import build_date_filter
 
-_FLAG_COLUMNS = ["sport", "sickness", "stress", "allergy", "flight"]
+_FLAG_COLUMNS = EXTRA_INFO_FLAGS
 _FLAG_LABELS = {
     "sport": "Sport",
     "sickness": "Sick",
     "stress": "Stress",
     "allergy": "Allergy",
     "flight": "Flight",
+    "weather": "Weather",
+    "smoke": "Smoke",
+    "strong_smells": "Strong smells",
+    "pets": "Pets",
+    "dust": "Dust",
+    "menstrual_cycle": "Menstrual cycle",
+    "dyspnea": "Dyspnea",
+    "cough": "Cough",
+    "wheezing": "Wheezing",
+    "chest_tightness": "Chest tightness",
+    "nocturnal_symptoms": "Nocturnal symptoms",
 }
 
 
 def build_export_csv(user_id: str, days, custom_range):
     start_str, end_str, label = build_date_filter(days, custom_range)
 
-    readings = reading_repository.fetch_full_readings_df(user_id, start_str, end_str)
-    meds = medicine_repository.fetch_medicine_doses_df(user_id, start_str, end_str)
-    flags = extra_info_repository.fetch_flags_df(user_id, start_str, end_str)
+    with UnitOfWork() as uow:
+        readings = uow.readings.fetch_full_readings_df(user_id, start_str, end_str)
+        meds = uow.medicines.fetch_medicine_doses_df(user_id, start_str, end_str)
+        flags = uow.extra_info.fetch_flags_df(user_id, start_str, end_str)
 
     if readings.empty:
         return None, label

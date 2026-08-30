@@ -8,7 +8,8 @@ import pandas as pd
 import seaborn as sns
 from matplotlib.figure import Figure
 
-from repositories import extra_info_repository, medicine_repository, reading_repository
+from repositories.extra_info_repository import EXTRA_INFO_FLAGS
+from repositories.unit_of_work import UnitOfWork
 from services import forecast_service
 from utils.dates import ALL_TIME, build_date_filter, classify_period
 from utils.formatting import FLAG_RU, ZONE_RU
@@ -25,59 +26,95 @@ _ZONE_COLOR = {
 }
 
 
-def _diurnal_variation_text(df: pd.DataFrame) -> str:
+def diurnal_stats(df: pd.DataFrame) -> dict | None:
     """Сравнивает утренние и вечерние показания по дням, где есть ОБА замера —
     отдельно от общей статистики, чтобы явно показать, ухудшается ли состояние
     к вечеру (это реальный клинический показатель: суточная изменчивость
     пикфлоу >10% — признанный маркер недостаточного контроля астмы, а не
-    просто нормальный разброс)."""
+    просто нормальный разброс).
+
+    `df` — уже с колонками "date" (datetime) и "period" ("morning"/"evening"),
+    как готовит run_analysis(). Возвращает структурированные числа — их же
+    использует report_service.py для отдельной секции в PDF-отчёте, чтобы не
+    держать это сравнение только в виде одной фразы внутри текста анализа."""
     morning = df[df["period"] == "morning"]
     evening = df[df["period"] == "evening"]
     if morning.empty or evening.empty:
-        return ""
+        return None
 
     m_by_day = morning.groupby(morning["date"].dt.normalize())["maximum"].mean()
     e_by_day = evening.groupby(evening["date"].dt.normalize())["maximum"].mean()
     common_days = m_by_day.index.intersection(e_by_day.index)
     if len(common_days) < 3:
-        return ""
+        return None
 
     diffs = e_by_day.loc[common_days] - m_by_day.loc[common_days]
-    avg_diff = diffs.mean()
-    mean_morning = m_by_day.loc[common_days].mean()
-    pct_diff = (avg_diff / mean_morning * 100) if mean_morning else 0.0
+    avg_diff = float(diffs.mean())
+    morning_avg = float(m_by_day.loc[common_days].mean())
+    evening_avg = float(e_by_day.loc[common_days].mean())
+    pct_diff = (avg_diff / morning_avg * 100) if morning_avg else 0.0
 
     if pct_diff <= -10:
-        interp = (
+        interpretation = (
             f"к вечеру в среднем хуже на {abs(pct_diff):.0f}% ({abs(avg_diff):.0f} л/мин) — "
             "заметная суточная изменчивость, стоит обсудить с врачом"
         )
     elif pct_diff >= 10:
-        interp = f"к вечеру в среднем лучше на {pct_diff:.0f}% ({avg_diff:.0f} л/мин)"
+        interpretation = (
+            f"к вечеру в среднем лучше на {pct_diff:.0f}% ({avg_diff:.0f} л/мин)"
+        )
     else:
-        interp = f"стабильно в течение дня (разница {pct_diff:+.0f}%)"
+        interpretation = f"стабильно в течение дня (разница {pct_diff:+.0f}%)"
 
+    return {
+        "days_count": int(len(common_days)),
+        "morning_avg": morning_avg,
+        "evening_avg": evening_avg,
+        "avg_diff": avg_diff,
+        "pct_diff": pct_diff,
+        "interpretation": interpretation,
+    }
+
+
+def _diurnal_variation_text(df: pd.DataFrame) -> str:
+    stats = diurnal_stats(df)
+    if stats is None:
+        return ""
     return (
-        f"\n🌗 Суточная динамика (по {len(common_days)} дн. с двумя замерами): {interp}."
+        f"\n🌗 Суточная динамика (по {stats['days_count']} дн. с двумя замерами): "
+        f"{stats['interpretation']}."
     )
+
+
+def diurnal_comparison(user_id: str, days, custom_range) -> dict | None:
+    """То же самое, но с собственной выборкой из БД — для report_service.py,
+    которому нужны только эти цифры, без остального текста анализа."""
+    start_str, end_str, _ = build_date_filter(days, custom_range)
+    with UnitOfWork() as uow:
+        df = uow.readings.fetch_readings_df(user_id, start_str, end_str)
+    if df.empty:
+        return None
+    df["date"] = pd.to_datetime(df["date"])
+    df["period"] = df["date"].map(classify_period)
+    return diurnal_stats(df)
 
 
 def run_analysis(user_id: str, days, custom_range) -> tuple:
     start_str, end_str, label = build_date_filter(days, custom_range)
-    df = reading_repository.fetch_readings_df(user_id, start_str, end_str)
-    if df.empty:
-        return f"Нет данных за {label}.", []
+    with UnitOfWork() as uow:
+        df = uow.readings.fetch_readings_df(user_id, start_str, end_str)
+        if df.empty:
+            return f"Нет данных за {label}.", []
+        flags = uow.extra_info.fetch_flags_df(user_id, start_str, end_str)
+        meds = uow.medicines.fetch_medicine_doses_df(user_id, start_str, end_str)
 
     df["date"] = pd.to_datetime(df["date"])
     df["period"] = df["date"].map(classify_period)
     df["day_key"] = df["date"].dt.normalize()
     daily = df.groupby("day_key", as_index=False)["maximum"].mean()
 
-    flags = extra_info_repository.fetch_flags_df(user_id, start_str, end_str)
-    meds = medicine_repository.fetch_medicine_doses_df(user_id, start_str, end_str)
-
     merged = daily.copy()
-    flag_cols = ["sport", "sickness", "stress", "allergy", "flight"]
+    flag_cols = EXTRA_INFO_FLAGS
     if not flags.empty:
         flags["day_key"] = pd.to_datetime(flags["date"]).dt.normalize()
         flags_agg = flags.groupby("day_key", as_index=False)[flag_cols].max()
@@ -166,8 +203,9 @@ def run_analysis(user_id: str, days, custom_range) -> tuple:
 
 def run_plot(user_id: str, days, custom_range) -> tuple:
     start_str, end_str, label = build_date_filter(days, custom_range)
-    df = reading_repository.fetch_readings_df(user_id, start_str, end_str)
-    thresholds = reading_repository.calculate_zone_thresholds(user_id, datetime.now())
+    with UnitOfWork() as uow:
+        df = uow.readings.fetch_readings_df(user_id, start_str, end_str)
+        thresholds = uow.readings.calculate_zone_thresholds(user_id, datetime.now())
 
     if df.empty:
         return f"Нет данных за {label}.", []

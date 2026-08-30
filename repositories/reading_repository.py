@@ -2,7 +2,6 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 from sqlalchemy import bindparam, func, select, update
-from sqlalchemy.orm import Session
 
 from models.domain import (
     GREEN_RATIO,
@@ -11,9 +10,11 @@ from models.domain import (
     classify_zone,
     thresholds_from_personal_best,
 )
-from repositories import extra_info_repository, medicine_repository, user_repository
-from repositories.db_engine import get_session
+from repositories.base_repository import BaseRepository
+from repositories.extra_info_repository import EXTRA_INFO_FLAGS, ExtraInfoRepository
+from repositories.medicine_repository import MedicineRepository
 from repositories.orm_models import Reading
+from repositories.user_repository import UserRepository
 
 # Персональный рекорд считается по данным за этот период (в днях)
 DEFAULT_ZONE_WINDOW_DAYS = 90
@@ -35,6 +36,28 @@ _EXTRA_INFO_ALIASES = {
     "flight": "flight",
     "перелёт": "flight",
     "перелет": "flight",
+    "weather": "weather",
+    "погода": "weather",
+    "smoke": "smoke",
+    "дым": "smoke",
+    "strong_smells": "strong_smells",
+    "запахи": "strong_smells",
+    "pets": "pets",
+    "животные": "pets",
+    "dust": "dust",
+    "пыль": "dust",
+    "menstrual_cycle": "menstrual_cycle",
+    "менструация": "menstrual_cycle",
+    "dyspnea": "dyspnea",
+    "одышка": "dyspnea",
+    "cough": "cough",
+    "кашель": "cough",
+    "wheezing": "wheezing",
+    "хрипы": "wheezing",
+    "chest_tightness": "chest_tightness",
+    "заложенность": "chest_tightness",
+    "nocturnal_symptoms": "nocturnal_symptoms",
+    "ночные симптомы": "nocturnal_symptoms",
 }
 
 
@@ -44,171 +67,8 @@ def _to_date_str(value) -> str:
     return value.strftime(DATE_FORMAT)
 
 
-def _calculate_zone_thresholds(
-    conn: Session,
-    user_id: str,
-    as_of_date,
-    window_days: int = DEFAULT_ZONE_WINDOW_DAYS,
-) -> ZoneThresholds | None:
-    if isinstance(as_of_date, str):
-        as_of_date = datetime.fromisoformat(as_of_date.split(" ")[0].replace("/", "-"))
-
-    as_of_str = as_of_date.strftime(DATE_FORMAT)
-    window_start_str = (as_of_date - timedelta(days=window_days)).strftime(DATE_FORMAT)
-
-    personal_best = conn.execute(
-        select(func.max(Reading.maximum)).where(
-            Reading.user_id == user_id,
-            Reading.maximum.isnot(None),
-            Reading.date <= as_of_str,
-            Reading.date >= window_start_str,
-        )
-    ).scalar_one_or_none()
-
-    if personal_best is None:
-        return None
-    return thresholds_from_personal_best(personal_best)
-
-
-def calculate_zone_thresholds(
-    user_id: str,
-    as_of_date,
-    window_days: int = DEFAULT_ZONE_WINDOW_DAYS,
-) -> ZoneThresholds | None:
-    conn = get_session()
-    try:
-        return _calculate_zone_thresholds(conn, user_id, as_of_date, window_days)
-    finally:
-        conn.close()
-
-
-def _recalculate_zones_for_user_history(
-    conn: Session, user_id: str, window_days: int = DEFAULT_ZONE_WINDOW_DAYS
-) -> int:
-    """Пересчитывает green_zone/yellow_zone для ВСЕЙ истории пользователя"""
-    rows = conn.execute(
-        select(Reading.id, Reading.date, Reading.maximum)
-        .where(Reading.user_id == user_id)
-        .order_by(Reading.date)
-    ).all()
-    if not rows:
-        return 0
-
-    df = pd.DataFrame(rows, columns=["id", "date", "maximum"])
-    df["date"] = pd.to_datetime(df["date"])
-    df = df.set_index("date")
-    personal_best = df["maximum"].rolling(f"{window_days}D", min_periods=1).max()
-
-    updates = []
-    reset = df.reset_index()
-    for idx, pb in zip(reset.index, personal_best.values):
-        row_id = int(reset.iloc[idx]["id"])
-        updates.append(
-            {
-                "b_id": row_id,
-                "green_zone": round(pb * GREEN_RATIO, 1),
-                "yellow_zone": round(pb * YELLOW_RATIO, 1),
-                "red_zone": 0.0,
-            }
-        )
-
-    if updates:
-        conn.connection().execute(
-            update(Reading)
-            .where(Reading.id == bindparam("b_id"))
-            .values(
-                green_zone=bindparam("green_zone"),
-                yellow_zone=bindparam("yellow_zone"),
-                red_zone=bindparam("red_zone"),
-            ),
-            updates,
-        )
-    conn.commit()
-    return len(updates)
-
-
-def _insert_reading(
-    conn: Session,
-    user_id: str,
-    date,
-    first_try: float,
-    second_try: float,
-    third_try: float,
-) -> tuple:
-    """Вставляет новую запись и сразу считает для неё зоны"""
-    maximum = max(first_try, second_try, third_try)
-    date_str = _to_date_str(date)
-
-    thresholds = _calculate_zone_thresholds(
-        conn, user_id, date, DEFAULT_ZONE_WINDOW_DAYS
-    )
-    if thresholds is None:
-        thresholds = thresholds_from_personal_best(maximum)
-    else:
-        thresholds = thresholds_from_personal_best(
-            max(thresholds.personal_best, maximum)
-        )
-
-    reading = Reading(
-        user_id=user_id,
-        date=date_str,
-        first_try=first_try,
-        second_try=second_try,
-        third_try=third_try,
-        maximum=maximum,
-        green_zone=thresholds.green_zone,
-        yellow_zone=thresholds.yellow_zone,
-        red_zone=thresholds.red_zone,
-    )
-    conn.add(reading)
-    conn.flush()
-
-    zone = classify_zone(maximum, thresholds)
-    return reading.id, thresholds, zone
-
-
-def save_reading_entry(
-    user_id: str,
-    when: datetime,
-    first_try: float,
-    second_try: float,
-    third_try: float,
-    medicine_name: str | None = None,
-    doses: int | None = None,
-    flags: dict | None = None,
-    attacks_count: int | None = None,
-    record_time: str | None = None,
-) -> tuple:
-    date_str = when.strftime(DATE_FORMAT)
-    conn = get_session()
-    try:
-        user_repository._ensure_user(conn, user_id)
-        _, thresholds, zone = _insert_reading(
-            conn, user_id, when, first_try, second_try, third_try
-        )
-
-        if medicine_name and doses:
-            medicine_id = medicine_repository._get_or_create_medicine_id(
-                conn, user_id, medicine_name
-            )
-            medicine_repository._add_taken_medicine(
-                conn, medicine_id, user_id, doses, date_str
-            )
-
-        flags = flags or {}
-        if attacks_count is not None or any(flags.values()):
-            extra_info_repository._add_extra_info(
-                conn, user_id, date_str, flags, attacks_count, record_time
-            )
-
-        conn.commit()
-        return thresholds, zone
-    finally:
-        conn.close()
-
-
 def _parse_extra_info_cell(cell: str) -> dict:
-    flags = {f: False for f in extra_info_repository.EXTRA_INFO_FLAGS}
+    flags = {f: False for f in EXTRA_INFO_FLAGS}
     if not cell or (isinstance(cell, float) and pd.isna(cell)):
         return flags
     tokens = [t.strip().lower() for t in str(cell).split(",") if t.strip()]
@@ -219,41 +79,160 @@ def _parse_extra_info_cell(cell: str) -> dict:
     return flags
 
 
-def import_dataframe(df: pd.DataFrame, user_id: str) -> dict:
-    df = df.copy()
-    df.columns = [str(c).strip() for c in df.columns]
+class ReadingRepository(BaseRepository):
+    def calculate_zone_thresholds(
+        self,
+        user_id: str,
+        as_of_date,
+        window_days: int = DEFAULT_ZONE_WINDOW_DAYS,
+    ) -> ZoneThresholds | None:
+        if isinstance(as_of_date, str):
+            as_of_date = datetime.fromisoformat(
+                as_of_date.split(" ")[0].replace("/", "-")
+            )
 
-    required = {"First try", "Second try", "Third try", "Date"}
-    missing = required - set(df.columns)
-    if missing:
-        raise ValueError(f"В файле не хватает колонок: {', '.join(sorted(missing))}")
+        as_of_str = as_of_date.strftime(DATE_FORMAT)
+        window_start_str = (as_of_date - timedelta(days=window_days)).strftime(
+            DATE_FORMAT
+        )
 
-    df["Date"] = pd.to_datetime(df["Date"], format="%m/%d/%Y", errors="coerce")
-    bad_dates = df["Date"].isna().sum()
-    df = df.dropna(subset=["Date"])
+        personal_best = self.db.execute(
+            select(func.max(Reading.maximum)).where(
+                Reading.user_id == user_id,
+                Reading.maximum.isnot(None),
+                Reading.date <= as_of_str,
+                Reading.date >= window_start_str,
+            )
+        ).scalar_one_or_none()
 
-    known_non_medicine_cols = {
-        "First try",
-        "Second try",
-        "Third try",
-        "Maximum",
-        "Date",
-        "Green Zone",
-        "Yellow Zone",
-        "Red Zone",
-        "Extra info",
-    }
-    medicine_cols = [c for c in df.columns if c not in known_non_medicine_cols]
+        if personal_best is None:
+            return None
+        return thresholds_from_personal_best(personal_best)
 
-    readings_inserted = 0
-    doses_inserted = 0
-    extra_info_inserted = 0
+    def _recalculate_zones_for_user_history(
+        self, user_id: str, window_days: int = DEFAULT_ZONE_WINDOW_DAYS
+    ) -> int:
+        """Пересчитывает green_zone/yellow_zone для ВСЕЙ истории пользователя"""
+        rows = self.db.execute(
+            select(Reading.id, Reading.date, Reading.maximum)
+            .where(Reading.user_id == user_id)
+            .order_by(Reading.date)
+        ).all()
+        if not rows:
+            return 0
 
-    conn = get_session()
-    try:
-        user_repository._ensure_user(conn, user_id)
+        df = pd.DataFrame(rows, columns=["id", "date", "maximum"])
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.set_index("date")
+        personal_best = df["maximum"].rolling(f"{window_days}D", min_periods=1).max()
+
+        updates = []
+        reset = df.reset_index()
+        for idx, pb in zip(reset.index, personal_best.values):
+            row_id = int(reset.iloc[idx]["id"])
+            updates.append(
+                {
+                    "b_id": row_id,
+                    "green_zone": round(pb * GREEN_RATIO, 1),
+                    "yellow_zone": round(pb * YELLOW_RATIO, 1),
+                    "red_zone": 0.0,
+                }
+            )
+
+        if updates:
+            self.db.connection().execute(
+                update(Reading)
+                .where(Reading.id == bindparam("b_id"))
+                .values(
+                    green_zone=bindparam("green_zone"),
+                    yellow_zone=bindparam("yellow_zone"),
+                    red_zone=bindparam("red_zone"),
+                ),
+                updates,
+            )
+        return len(updates)
+
+    def insert_reading(
+        self,
+        user_id: str,
+        date,
+        first_try: float,
+        second_try: float,
+        third_try: float,
+    ) -> tuple:
+        """Вставляет новую запись и сразу считает для неё зоны"""
+        maximum = max(first_try, second_try, third_try)
+        date_str = _to_date_str(date)
+
+        thresholds = self.calculate_zone_thresholds(
+            user_id, date, DEFAULT_ZONE_WINDOW_DAYS
+        )
+        if thresholds is None:
+            thresholds = thresholds_from_personal_best(maximum)
+        else:
+            thresholds = thresholds_from_personal_best(
+                max(thresholds.personal_best, maximum)
+            )
+
+        reading = Reading(
+            user_id=user_id,
+            date=date_str,
+            first_try=first_try,
+            second_try=second_try,
+            third_try=third_try,
+            maximum=maximum,
+            green_zone=thresholds.green_zone,
+            yellow_zone=thresholds.yellow_zone,
+            red_zone=thresholds.red_zone,
+        )
+        self.db.add(reading)
+        self.db.flush()
+
+        zone = classify_zone(maximum, thresholds)
+        return reading.id, thresholds, zone
+
+    def import_dataframe(self, df: pd.DataFrame, user_id: str) -> dict:
+        df = df.copy()
+        df.columns = [str(c).strip() for c in df.columns]
+
+        required = {"First try", "Second try", "Third try", "Date"}
+        missing = required - set(df.columns)
+        if missing:
+            raise ValueError(
+                f"В файле не хватает колонок: {', '.join(sorted(missing))}"
+            )
+
+        df["Date"] = pd.to_datetime(df["Date"], format="%m/%d/%Y", errors="coerce")
+        bad_dates = df["Date"].isna().sum()
+        df = df.dropna(subset=["Date"])
+
+        known_non_medicine_cols = {
+            "First try",
+            "Second try",
+            "Third try",
+            "Maximum",
+            "Date",
+            "Green Zone",
+            "Yellow Zone",
+            "Red Zone",
+            "Extra info",
+        }
+        medicine_cols = [c for c in df.columns if c not in known_non_medicine_cols]
+
+        readings_inserted = 0
+        doses_inserted = 0
+        extra_info_inserted = 0
+
+        # Одна и та же сессия (self.db) для всех задействованных таблиц —
+        # либо весь импорт целиком, либо (при ошибке и откате UnitOfWork)
+        # ничего из него не попадёт в БД.
+        users = UserRepository(self.db)
+        medicines = MedicineRepository(self.db)
+        extra_info = ExtraInfoRepository(self.db)
+
+        users.ensure_user(user_id)
         for med_name in medicine_cols:
-            medicine_repository._get_or_create_medicine_id(conn, user_id, med_name)
+            medicines.get_or_create_medicine_id(user_id, med_name)
 
         for _, row in df.iterrows():
             date_str = row["Date"].strftime(f"%Y-%m-%d {DEFAULT_IMPORT_TIME}")
@@ -269,7 +248,7 @@ def import_dataframe(df: pd.DataFrame, user_id: str) -> dict:
                 if "Maximum" in df.columns and not pd.isna(row.get("Maximum"))
                 else max(first_try, second_try, third_try)
             )
-            conn.add(
+            self.db.add(
                 Reading(
                     user_id=user_id,
                     date=date_str,
@@ -288,40 +267,34 @@ def import_dataframe(df: pd.DataFrame, user_id: str) -> dict:
                 doses = row.get(med_name)
                 if pd.isna(doses) or doses == 0:
                     continue
-                medicine_id = medicine_repository._get_or_create_medicine_id(
-                    conn, user_id, med_name
-                )
-                medicine_repository._add_taken_medicine(
-                    conn, medicine_id, user_id, int(doses), date_str
-                )
+                medicine_id = medicines.get_or_create_medicine_id(user_id, med_name)
+                medicines.add_taken_medicine(medicine_id, user_id, int(doses), date_str)
                 doses_inserted += 1
 
             if "Extra info" in df.columns:
                 flags = _parse_extra_info_cell(row.get("Extra info"))
                 if any(flags.values()):
-                    extra_info_repository._add_extra_info(
-                        conn, user_id, date_str, flags
-                    )
+                    extra_info.add_extra_info(user_id, date_str, flags)
                     extra_info_inserted += 1
 
-        conn.commit()
-        updated_zone_rows = _recalculate_zones_for_user_history(conn, user_id)
-    finally:
-        conn.close()
+        # Пересчёт зон читает только что добавленные Reading через SELECT —
+        # сессия сделана с autoflush=False, поэтому без явного flush() ORM их
+        # не увидит (в старом коде эту роль играл промежуточный conn.commit()).
+        self.db.flush()
+        updated_zone_rows = self._recalculate_zones_for_user_history(user_id)
 
-    return {
-        "rows_in_file": len(df),
-        "readings_inserted": readings_inserted,
-        "doses_inserted": doses_inserted,
-        "extra_info_inserted": extra_info_inserted,
-        "zone_rows_recalculated": updated_zone_rows,
-        "bad_dates_skipped": int(bad_dates),
-    }
+        return {
+            "rows_in_file": len(df),
+            "readings_inserted": readings_inserted,
+            "doses_inserted": doses_inserted,
+            "extra_info_inserted": extra_info_inserted,
+            "zone_rows_recalculated": updated_zone_rows,
+            "bad_dates_skipped": int(bad_dates),
+        }
 
-
-def fetch_full_readings_df(user_id: str, start_str: str, end_str: str) -> pd.DataFrame:
-    conn = get_session()
-    try:
+    def fetch_full_readings_df(
+        self, user_id: str, start_str: str, end_str: str
+    ) -> pd.DataFrame:
         stmt = (
             select(
                 Reading.date,
@@ -341,7 +314,7 @@ def fetch_full_readings_df(user_id: str, start_str: str, end_str: str) -> pd.Dat
             .order_by(Reading.date)
         )
         return pd.DataFrame(
-            conn.execute(stmt).all(),
+            self.db.execute(stmt).all(),
             columns=[
                 "date",
                 "first_try",
@@ -353,13 +326,10 @@ def fetch_full_readings_df(user_id: str, start_str: str, end_str: str) -> pd.Dat
                 "red_zone",
             ],
         )
-    finally:
-        conn.close()
 
-
-def fetch_readings_df(user_id: str, start_str: str, end_str: str) -> pd.DataFrame:
-    conn = get_session()
-    try:
+    def fetch_readings_df(
+        self, user_id: str, start_str: str, end_str: str
+    ) -> pd.DataFrame:
         stmt = (
             select(Reading.date, Reading.maximum)
             .where(
@@ -370,15 +340,10 @@ def fetch_readings_df(user_id: str, start_str: str, end_str: str) -> pd.DataFram
             )
             .order_by(Reading.date)
         )
-        return pd.DataFrame(conn.execute(stmt).all(), columns=["date", "maximum"])
-    finally:
-        conn.close()
+        return pd.DataFrame(self.db.execute(stmt).all(), columns=["date", "maximum"])
 
-
-def fetch_history_since_df(user_id: str, since_str: str) -> pd.DataFrame:
-    """Вся история с определённой даты, без верхней границы — для прогноза."""
-    conn = get_session()
-    try:
+    def fetch_history_since_df(self, user_id: str, since_str: str) -> pd.DataFrame:
+        """Вся история с определённой даты, без верхней границы — для прогноза."""
         stmt = (
             select(Reading.date, Reading.maximum)
             .where(
@@ -388,16 +353,11 @@ def fetch_history_since_df(user_id: str, since_str: str) -> pd.DataFrame:
             )
             .order_by(Reading.date)
         )
-        return pd.DataFrame(conn.execute(stmt).all(), columns=["date", "maximum"])
-    finally:
-        conn.close()
+        return pd.DataFrame(self.db.execute(stmt).all(), columns=["date", "maximum"])
 
-
-def fetch_all_readings_with_zones_df(user_id: str) -> pd.DataFrame:
-    """Вся история показаний с уже посчитанными на тот момент зонами —
-    для recommend_service.py."""
-    conn = get_session()
-    try:
+    def fetch_all_readings_with_zones_df(self, user_id: str) -> pd.DataFrame:
+        """Вся история показаний с уже посчитанными на тот момент зонами —
+        для recommend_service.py."""
         stmt = (
             select(
                 Reading.date, Reading.maximum, Reading.green_zone, Reading.yellow_zone
@@ -410,8 +370,6 @@ def fetch_all_readings_with_zones_df(user_id: str) -> pd.DataFrame:
             .order_by(Reading.date)
         )
         return pd.DataFrame(
-            conn.execute(stmt).all(),
+            self.db.execute(stmt).all(),
             columns=["date", "maximum", "green_zone", "yellow_zone"],
         )
-    finally:
-        conn.close()
