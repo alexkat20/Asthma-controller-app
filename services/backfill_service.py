@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 
 from models.schemas import ChatOut
 from repositories.unit_of_work import UnitOfWork
+from utils.numbers import extract_numbers
 from utils.formatting import MAIN_MENU, ZONE_RU
 
 _DATE_RE = re.compile(r"(\d{1,2})\.(\d{1,2})\.(\d{4})")
@@ -21,7 +22,7 @@ _PERIOD_ADJ_RU = {"morning": "Утреннее", "evening": "Вечернее"}
 
 
 def _extract_numbers(text: str) -> list:
-    return [float(n.replace(",", ".")) for n in re.findall(r"\d+(?:[.,]\d+)?", text)]
+    return extract_numbers(text)
 
 
 def _parse_date(text: str) -> date_cls | None:

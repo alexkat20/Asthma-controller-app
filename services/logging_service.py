@@ -10,6 +10,7 @@ from repositories.extra_info_repository import (
 from repositories.unit_of_work import UnitOfWork
 from services import nlp_service, recommend_service, treatment_plan_service
 from utils.dates import MORNING_CUTOFF_HOUR
+from utils.numbers import extract_numbers
 from utils.formatting import FLAG_RU, MAIN_MENU, ZONE_RU
 
 NO_MEDICINE_LABEL = "Без препарата"
@@ -23,7 +24,7 @@ _MENSTRUAL_FLAG = "menstrual_cycle"
 
 
 def _extract_numbers(text: str) -> list:
-    return [float(n.replace(",", ".")) for n in re.findall(r"\d+(?:[.,]\d+)?", text)]
+    return extract_numbers(text)
 
 
 def looks_like_reading(text: str) -> bool:
