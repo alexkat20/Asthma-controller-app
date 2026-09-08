@@ -72,11 +72,11 @@ def _trend_slope(df: pd.DataFrame, window_days: int = 21) -> float:
     return float(slope)
 
 
-def _flag_effects(readings_df: pd.DataFrame, flags_df: pd.DataFrame) -> dict:
+def flag_effects(readings_df: pd.DataFrame, flags_df: pd.DataFrame) -> dict:
     if flags_df.empty or readings_df.empty:
         return {}
     merged = readings_df.copy()
-    merged["prev_date"] = merged["date"] - pd.Timedelta(days=1)
+    merged["prev_date"] = merged["date"].dt.normalize() - pd.Timedelta(days=1)
     baseline_mean = readings_df["maximum"].mean()
 
     effects = {}
@@ -123,8 +123,18 @@ def _build_context(user_id, period: str | None = None):
         "last_date": df["date"].max(),
         "weekday_effects": _weekday_effect(df),
         "slope": _trend_slope(df),
-        "flag_effects": _flag_effects(df, flags_df),
+        "flag_effects": flag_effects(df, flags_df),
     }
+
+
+def carryover_effects(
+    user_id: str, period: str | None = None, lookback_days: int = 365
+) -> dict:
+    df = _load_history(user_id, period=period, lookback_days=lookback_days)
+    if df.empty:
+        return {}
+    flags_df = _load_flags(user_id, lookback_days=lookback_days)
+    return flag_effects(df, flags_df)
 
 
 def forecast_today(user_id: str, period: str | None = None) -> dict | None:

@@ -29,14 +29,7 @@ _ZONE_COLOR = {
 def diurnal_stats(df: pd.DataFrame) -> dict | None:
     """Сравнивает утренние и вечерние показания по дням, где есть ОБА замера —
     отдельно от общей статистики, чтобы явно показать, ухудшается ли состояние
-    к вечеру (это реальный клинический показатель: суточная изменчивость
-    пикфлоу >10% — признанный маркер недостаточного контроля астмы, а не
-    просто нормальный разброс).
-
-    `df` — уже с колонками "date" (datetime) и "period" ("morning"/"evening"),
-    как готовит run_analysis(). Возвращает структурированные числа — их же
-    использует report_service.py для отдельной секции в PDF-отчёте, чтобы не
-    держать это сравнение только в виде одной фразы внутри текста анализа."""
+    к вечеру"""
     morning = df[df["period"] == "morning"]
     evening = df[df["period"] == "evening"]
     if morning.empty or evening.empty:
@@ -84,6 +77,33 @@ def _diurnal_variation_text(df: pd.DataFrame) -> str:
         f"\n🌗 Суточная динамика (по {stats['days_count']} дн. с двумя замерами): "
         f"{stats['interpretation']}."
     )
+
+
+def _carryover_lines(effects: dict, limit: int = 4) -> list[str]:
+    ranked = sorted(effects.items(), key=lambda kv: abs(kv[1]), reverse=True)[:limit]
+    lines = []
+    for flag, effect in ranked:
+        direction = "ниже" if effect < 0 else "выше"
+        lines.append(
+            f"    {FLAG_RU[flag]} накануне → {direction} на {abs(effect):.0f} л/мин"
+        )
+    return lines
+
+
+def carryover_text(user_id: str) -> str:
+    morning = forecast_service.carryover_effects(user_id, period="morning")
+    evening = forecast_service.carryover_effects(user_id, period="evening")
+    if not morning and not evening:
+        return ""
+
+    lines = ["\n🌙→ Влияние вчерашнего состояния на сегодняшний пикфлоу:"]
+    if morning:
+        lines.append("  Утро:")
+        lines.extend(_carryover_lines(morning))
+    if evening:
+        lines.append("  Вечер:")
+        lines.extend(_carryover_lines(evening))
+    return "\n".join(lines)
 
 
 def diurnal_comparison(user_id: str, days, custom_range) -> dict | None:
@@ -169,6 +189,7 @@ def run_analysis(user_id: str, days, custom_range) -> tuple:
         )
     period_block = ("\n" + "\n".join(period_lines)) if period_lines else ""
     diurnal_block = _diurnal_variation_text(df)
+    carryover_block = carryover_text(user_id)
 
     images = []
     top_factors = ""
@@ -196,6 +217,7 @@ def run_analysis(user_id: str, days, custom_range) -> tuple:
         f"Тренд за период: {trend}"
         f"{period_block}"
         f"{diurnal_block}"
+        f"{carryover_block}"
         f"{top_factors}"
     )
     return text, images
