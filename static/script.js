@@ -22,6 +22,9 @@ const textInput = document.getElementById("textInput");
 const sendBtn = document.getElementById("sendBtn");
 const uploadBtn = document.getElementById("uploadBtn");
 const fileInput = document.getElementById("fileInput");
+const uploadPeriodChoice = document.getElementById("uploadPeriodChoice");
+const uploadMorningBtn = document.getElementById("uploadMorningBtn");
+const uploadEveningBtn = document.getElementById("uploadEveningBtn");
 const micBtn = document.getElementById("micBtn");
 const sliderWidget = document.getElementById("sliderWidget");
 const sliderLabel = document.getElementById("sliderLabel");
@@ -292,14 +295,34 @@ textInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") sendMessage();
 });
 
-uploadBtn.addEventListener("click", () => fileInput.click());
+// Файл сам по себе не хранит, утренние это показания или вечерние (только
+// дату) — поэтому перед выбором файла явно спрашиваем период: от него
+// зависит, каким временем замера будут помечены все строки файла и,
+// соответственно, попадут ли они дальше в "утро" или "вечер" (таблица,
+// анализ, прогноз — см. repositories/reading_repository.py::import_dataframe).
+let pendingUploadPeriod = "evening";
+
+uploadBtn.addEventListener("click", () => {
+  uploadPeriodChoice.hidden = false;
+});
+
+function startFilePick(period) {
+  pendingUploadPeriod = period;
+  uploadPeriodChoice.hidden = true;
+  fileInput.click();
+}
+uploadMorningBtn.addEventListener("click", () => startFilePick("morning"));
+uploadEveningBtn.addEventListener("click", () => startFilePick("evening"));
+
 fileInput.addEventListener("change", async () => {
   const file = fileInput.files[0];
   if (!file) return;
-  addSystemNote(`Загружаю файл «${file.name}»…`);
+  const periodLabel = pendingUploadPeriod === "morning" ? "утренние" : "вечерние";
+  addSystemNote(`Загружаю файл «${file.name}» как ${periodLabel} показания…`);
   const formData = new FormData();
   formData.append("user_id", USER_ID);
   formData.append("file", file);
+  formData.append("period", pendingUploadPeriod);
 
   showTyping();
   try {

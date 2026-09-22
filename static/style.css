@@ -23,15 +23,36 @@ html, body {
   margin: 0;
 }
 
+/* body сам и есть колонка чата (как было изначально) — просто ограничена по
+   ширине и отцентрирована через margin:auto, без дополнительной обёртки:
+   меньше рисков сломать расчёт высоты (flex + 100dvh уже итак хрупкая
+   комбинация — лишний вложенный flex-контейнер один раз это уже подтвердил
+   на практике). На мобильных (viewport < max-width) margin:auto ничего не
+   делает — колонка просто занимает весь экран, как и раньше. */
 body {
   font-family: 'Inter', system-ui, sans-serif;
   background: var(--bg);
   color: var(--ink);
   display: flex;
   flex-direction: column;
+  width: 100%;
+  max-width: 720px;
+  margin: 0 auto;
   height: 100vh;
   height: 100dvh;
   overflow: hidden;
+}
+
+@media (min-width: 760px) {
+  html { background: var(--bg); }
+  body {
+    margin: 20px auto;
+    height: calc(100vh - 40px);
+    height: calc(100dvh - 40px);
+    border: 1px solid var(--line);
+    border-radius: 20px;
+    box-shadow: 0 8px 32px rgba(20, 40, 40, 0.10);
+  }
 }
 
 /* ---------- Header ---------- */
@@ -251,13 +272,25 @@ body {
 .typing span:nth-child(3) { animation-delay: .4s; }
 @keyframes blink { 0%, 80%, 100% { opacity: .25; } 40% { opacity: 1; } }
 
-/* ---------- Quick replies ---------- */
+/* ---------- Quick replies ----------
+   Кнопки оборачиваются в несколько строк (а не одна прокручиваемая вправо
+   лента) — так все варианты видны сразу, без скрытых за краем экрана кнопок;
+   это стандартный паттерн для reply-кнопок в мессенджерах (Telegram, WhatsApp
+   Business), особенно когда вариантов много (меню, триггеры/симптомы). */
 .quick-replies {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 0 18px 10px;
-  overflow-x: auto;
   flex-shrink: 0;
+  /* Фиксированный небольшой лимит (не доля экрана!) — иначе на узких
+     экранах с длинным списком кнопок (главное меню, триггеры/симптомы)
+     панель кнопок разрастается на много строк и вытесняет #chat, обрезая
+     сообщения (см. flex-shrink:0 — эта панель принципиально не сжимается
+     под #chat, поэтому важно не дать ей самой вырасти слишком большой).
+     ~3 строки видно сразу, остальное — прокруткой внутри панели. */
+  max-height: 132px;
+  overflow-y: auto;
 }
 .quick-replies:empty { padding: 0; }
 
@@ -275,11 +308,12 @@ body {
 }
 .chip:hover { background: var(--teal); color: #fff; }
 
-/* ---------- Slider (роллер количества дней) ---------- */
+/* ---------- Slider (роллер количества дней) / узкие inline-выборы ---------- */
 .slider-widget {
   display: flex;
   align-items: center;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: 10px 12px;
   padding: 10px 18px;
   flex-shrink: 0;
 }

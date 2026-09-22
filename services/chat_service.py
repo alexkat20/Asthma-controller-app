@@ -210,7 +210,7 @@ def _process_full(
             reply, images = analytics_service.run_plot(user_id, days, custom)
         else:
             return ChatOut(
-                reply="📄 Экспорт готов — файл начнёт скачиваться автоматически.",
+                reply="📄 Экспорт готов — Excel-файл (страницы «evening» и «morning») начнёт скачиваться автоматически.",
                 quick_replies=MAIN_MENU,
                 download_url=_export_download_url(user_id, days, custom),
             )
@@ -516,7 +516,7 @@ def _process_read_only(
             reply, images = analytics_service.run_plot(user_id, days, custom)
         else:
             return ChatOut(
-                reply="📄 Экспорт готов — файл начнёт скачиваться автоматически.",
+                reply="📄 Экспорт готов — Excel-файл (страницы «evening» и «morning») начнёт скачиваться автоматически.",
                 quick_replies=READ_ONLY_MENU,
                 download_url=_export_download_url(user_id, days, custom),
             )

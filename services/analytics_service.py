@@ -24,6 +24,15 @@ _ZONE_COLOR = {
     "red": "#D14343",
     "unknown": "#999",
 }
+_WEEKDAY_RU = {
+    "Monday": "Понедельник",
+    "Tuesday": "Вторник",
+    "Wednesday": "Среда",
+    "Thursday": "Четверг",
+    "Friday": "Пятница",
+    "Saturday": "Суббота",
+    "Sunday": "Воскресенье",
+}
 
 
 def diurnal_stats(df: pd.DataFrame) -> dict | None:
@@ -90,25 +99,106 @@ def _carryover_lines(effects: dict, limit: int = 4) -> list[str]:
     return lines
 
 
-def carryover_text(user_id: str) -> str:
-    morning = forecast_service.carryover_effects(user_id, period="morning")
-    evening = forecast_service.carryover_effects(user_id, period="evening")
-    if not morning and not evening:
+def _morning_influence(user_id: str) -> str:
+    """Утро: только вчерашние триггеры/симптомы"""
+    effects = forecast_service.carryover_effects(user_id, period="morning")
+    if not effects:
         return ""
+    lines = _carryover_lines(effects)
+    return (
+        "\n🌅 Что сильнее всего влияет на утренний пикфлоу (вчерашнее состояние):\n"
+        + "\n".join(lines)
+    )
 
-    lines = ["\n🌙→ Влияние вчерашнего состояния на сегодняшний пикфлоу:"]
-    if morning:
-        lines.append("  Утро:")
-        lines.extend(_carryover_lines(morning))
-    if evening:
-        lines.append("  Вечер:")
-        lines.extend(_carryover_lines(evening))
-    return "\n".join(lines)
+
+def _humanize_factor(name: str) -> str:
+    return FLAG_RU.get(name, name)
+
+
+def _evening_influence(
+    df: pd.DataFrame, flags: pd.DataFrame, meds: pd.DataFrame
+) -> tuple[str, list]:
+    """Вечер: связь пикфлоу с любыми факторами ТОГО ЖЕ дня — триггерами/
+    симптомами, препаратами, днём недели"""
+    evening_df = df[df["period"] == "evening"]
+    if evening_df.empty:
+        return "", []
+
+    daily = evening_df.groupby("day_key", as_index=False)["maximum"].mean()
+    merged = daily.copy()
+
+    flag_cols = EXTRA_INFO_FLAGS
+    if not flags.empty:
+        flags_agg = flags.groupby("day_key", as_index=False)[flag_cols].max()
+        merged = merged.merge(flags_agg, on="day_key", how="left")
+    for col in flag_cols:
+        if col not in merged.columns:
+            merged[col] = 0
+    merged[flag_cols] = merged[flag_cols].fillna(0).astype(int)
+
+    med_cols = []
+    if not meds.empty:
+        pivot = meds.pivot_table(
+            index="day_key",
+            columns="medicine_name",
+            values="doses",
+            aggfunc="sum",
+            fill_value=0,
+        ).reset_index()
+        merged = merged.merge(pivot, on="day_key", how="left")
+        med_cols = [c for c in pivot.columns if c != "day_key"]
+        merged[med_cols] = merged[med_cols].fillna(0)
+
+    merged["weekday"] = merged["day_key"].dt.day_name().map(_WEEKDAY_RU)
+    weekday_dummies = pd.get_dummies(merged["weekday"], prefix="день")
+
+    corr_input = pd.concat(
+        [merged[["maximum"] + flag_cols + med_cols], weekday_dummies], axis=1
+    )
+    corr_matrix = (
+        corr_input.corr(numeric_only=True)[["maximum"]].drop(index="maximum").dropna()
+    )
+    if corr_matrix.empty:
+        return "", []
+    corr_matrix = corr_matrix.rename(index=_humanize_factor)
+
+    fig = Figure(figsize=(5, max(2.5, 0.32 * len(corr_matrix))))
+    ax = fig.add_subplot(111)
+    sns.heatmap(
+        corr_matrix,
+        annot=True,
+        cmap="coolwarm",
+        center=0,
+        fmt=".2f",
+        cbar=False,
+        ax=ax,
+    )
+    ax.set_title("Вечер: корреляция с пикфлоу")
+    fig.tight_layout()
+    images = [fig_to_data_uri(fig)]
+
+    top = corr_matrix["maximum"].abs().sort_values(ascending=False).head(4)
+    lines = [f"    {name}: r={corr_matrix['maximum'][name]:+.2f}" for name in top.index]
+    text = "\n🌆 Что сильнее всего влияет на вечерний пикфлоу:\n" + "\n".join(lines)
+    return text, images
+
+
+def _period_stat_lines(df: pd.DataFrame) -> list[str]:
+    lines = []
+    for period in ("evening", "morning"):
+        sub = df[df["period"] == period]
+        if sub.empty:
+            continue
+        lines.append(
+            f"{_PERIOD_LABEL[period].capitalize()}: среднее {sub['maximum'].mean():.0f}, "
+            f"медиана {sub['maximum'].median():.0f}, "
+            f"мин {sub['maximum'].min():.0f}, макс {sub['maximum'].max():.0f} "
+            f"({len(sub)} зам.)"
+        )
+    return lines
 
 
 def diurnal_comparison(user_id: str, days, custom_range) -> dict | None:
-    """То же самое, но с собственной выборкой из БД — для report_service.py,
-    которому нужны только эти цифры, без остального текста анализа."""
     start_str, end_str, _ = build_date_filter(days, custom_range)
     with UnitOfWork() as uow:
         df = uow.readings.fetch_readings_df(user_id, start_str, end_str)
@@ -131,94 +221,26 @@ def run_analysis(user_id: str, days, custom_range) -> tuple:
     df["date"] = pd.to_datetime(df["date"])
     df["period"] = df["date"].map(classify_period)
     df["day_key"] = df["date"].dt.normalize()
-    daily = df.groupby("day_key", as_index=False)["maximum"].mean()
 
-    merged = daily.copy()
-    flag_cols = EXTRA_INFO_FLAGS
     if not flags.empty:
+        flags = flags.copy()
         flags["day_key"] = pd.to_datetime(flags["date"]).dt.normalize()
-        flags_agg = flags.groupby("day_key", as_index=False)[flag_cols].max()
-        merged = merged.merge(flags_agg, on="day_key", how="left")
-    for col in flag_cols:
-        if col not in merged.columns:
-            merged[col] = 0
-    merged[flag_cols] = merged[flag_cols].fillna(0)
-
-    med_cols = []
     if not meds.empty:
+        meds = meds.copy()
         meds["day_key"] = pd.to_datetime(meds["date"]).dt.normalize()
-        pivot = meds.pivot_table(
-            index="day_key",
-            columns="medicine_name",
-            values="doses",
-            aggfunc="sum",
-            fill_value=0,
-        )
-        pivot = pivot.reset_index()
-        merged = merged.merge(pivot, on="day_key", how="left")
-        med_cols = [c for c in pivot.columns if c != "day_key"]
-        merged[med_cols] = merged[med_cols].fillna(0)
 
-    merged["weekday"] = merged["day_key"].dt.day_name()
-    weekday_dummies = pd.get_dummies(merged["weekday"], prefix="день")
-
-    corr_input = pd.concat(
-        [merged[["maximum"] + flag_cols + med_cols], weekday_dummies], axis=1
-    )
-    corr_matrix = (
-        corr_input.corr(numeric_only=True)[["maximum"]].drop(index="maximum").dropna()
-    )
-
-    avg, mn, mx = df["maximum"].mean(), df["maximum"].min(), df["maximum"].max()
-    trend = (
-        "рост"
-        if df["maximum"].iloc[-1] > df["maximum"].iloc[0]
-        else "снижение"
-        if df["maximum"].iloc[-1] < df["maximum"].iloc[0]
-        else "стабильно"
-    )
-
-    period_lines = []
-    for period in ("morning", "evening"):
-        sub = df[df["period"] == period]
-        if sub.empty:
-            continue
-        period_lines.append(
-            f"{_PERIOD_LABEL[period].capitalize()}: среднее {sub['maximum'].mean():.0f}, "
-            f"мин {sub['maximum'].min():.0f}, макс {sub['maximum'].max():.0f} ({len(sub)} зам.)"
-        )
-    period_block = ("\n" + "\n".join(period_lines)) if period_lines else ""
+    stat_lines = _period_stat_lines(df)
+    stat_block = ("\n" + "\n".join(stat_lines)) if stat_lines else ""
     diurnal_block = _diurnal_variation_text(df)
-    carryover_block = carryover_text(user_id)
-
-    images = []
-    top_factors = ""
-    if not corr_matrix.empty:
-        fig = Figure(figsize=(5, max(2.5, 0.32 * len(corr_matrix))))
-        ax = fig.add_subplot(111)
-        sns.heatmap(
-            corr_matrix,
-            annot=True,
-            cmap="coolwarm",
-            center=0,
-            fmt=".2f",
-            cbar=False,
-            ax=ax,
-        )
-        ax.set_title("Корреляция с максимумом пикфлоу")
-        fig.tight_layout()
-        images.append(fig_to_data_uri(fig))
-        top = corr_matrix["maximum"].abs().sort_values(ascending=False).head(3)
-        top_factors = "\nСильнее всего связаны с максимумом: " + ", ".join(top.index)
+    evening_text, images = _evening_influence(df, flags, meds)
+    morning_text = _morning_influence(user_id)
 
     text = (
-        f"📊 Анализ за {label}\n"
-        f"Среднее: {avg:.0f}, минимум: {mn:.0f}, максимум: {mx:.0f}\n"
-        f"Тренд за период: {trend}"
-        f"{period_block}"
+        f"📊 Анализ за {label}"
+        f"{stat_block}"
         f"{diurnal_block}"
-        f"{carryover_block}"
-        f"{top_factors}"
+        f"{evening_text}"
+        f"{morning_text}"
     )
     return text, images
 
@@ -246,10 +268,6 @@ def run_plot(user_id: str, days, custom_range) -> tuple:
         )
         ax.axhspan(0, thresholds.yellow_zone, color="#D14343", alpha=0.08)
 
-    # Утро и вечер — отдельными линиями (не смешиваем): утренний пикфлоу в норме
-    # почти всегда ниже вечернего сам по себе (обычная суточная физиология лёгких,
-    # а не ухудшение), поэтому единая смешанная линия маскирует и тренд, и
-    # реальную суточную разницу между "как было утром" и "как было вечером".
     for period in ("morning", "evening"):
         sub = df[df["period"] == period].sort_values("date")
         if sub.empty:

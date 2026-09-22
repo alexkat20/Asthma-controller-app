@@ -21,7 +21,9 @@ from utils.dates import classify_period
 DEFAULT_ZONE_WINDOW_DAYS = 90
 
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
-DEFAULT_IMPORT_TIME = "23:00:00"
+# Импортируемый файл не хранит время, только дату — приходится фиксировать
+# время замера, чтобы classify_period() потом мог отличить утро от вечера.
+DEFAULT_IMPORT_TIME = {"morning": "08:00:00", "evening": "23:00:00"}
 
 _EXTRA_INFO_ALIASES = {
     "sick": "sickness",
@@ -293,9 +295,14 @@ class ReadingRepository(BaseRepository):
             "yellow_zone": row.yellow_zone,
         }
 
-    def import_dataframe(self, df: pd.DataFrame, user_id: str) -> dict:
+    def import_dataframe(
+        self, df: pd.DataFrame, user_id: str, period: str = "evening"
+    ) -> dict:
+        """period="morning"/"evening" — каким временем замера помечать все
+        строки файла"""
         df = df.copy()
         df.columns = [str(c).strip() for c in df.columns]
+        import_time = DEFAULT_IMPORT_TIME.get(period, DEFAULT_IMPORT_TIME["evening"])
 
         required = {"First try", "Second try", "Third try", "Date"}
         missing = required - set(df.columns)
@@ -318,6 +325,7 @@ class ReadingRepository(BaseRepository):
             "Yellow Zone",
             "Red Zone",
             "Extra info",
+            "Difference",
         }
         medicine_cols = [c for c in df.columns if c not in known_non_medicine_cols]
 
@@ -325,9 +333,6 @@ class ReadingRepository(BaseRepository):
         doses_inserted = 0
         extra_info_inserted = 0
 
-        # Одна и та же сессия (self.db) для всех задействованных таблиц —
-        # либо весь импорт целиком, либо (при ошибке и откате UnitOfWork)
-        # ничего из него не попадёт в БД.
         users = UserRepository(self.db)
         medicines = MedicineRepository(self.db)
         extra_info = ExtraInfoRepository(self.db)
@@ -337,7 +342,7 @@ class ReadingRepository(BaseRepository):
             medicines.get_or_create_medicine_id(user_id, med_name)
 
         for _, row in df.iterrows():
-            date_str = row["Date"].strftime(f"%Y-%m-%d {DEFAULT_IMPORT_TIME}")
+            date_str = row["Date"].strftime(f"%Y-%m-%d {import_time}")
 
             first_try = row.get("First try")
             second_try = row.get("Second try")
@@ -366,7 +371,7 @@ class ReadingRepository(BaseRepository):
             readings_inserted += 1
 
             for med_name in medicine_cols:
-                doses = row.get(med_name)
+                doses = pd.to_numeric(row.get(med_name), errors="coerce")
                 if pd.isna(doses) or doses == 0:
                     continue
                 medicine_id = medicines.get_or_create_medicine_id(user_id, med_name)
@@ -379,9 +384,6 @@ class ReadingRepository(BaseRepository):
                     extra_info.add_extra_info(user_id, date_str, flags)
                     extra_info_inserted += 1
 
-        # Пересчёт зон читает только что добавленные Reading через SELECT —
-        # сессия сделана с autoflush=False, поэтому без явного flush() ORM их
-        # не увидит (в старом коде эту роль играл промежуточный conn.commit()).
         self.db.flush()
         updated_zone_rows = self._recalculate_zones_for_user_history(user_id)
 
